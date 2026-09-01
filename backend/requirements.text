@@ -1,0 +1,36 @@
+# LangGraph
+langgraph==1.2.11
+
+# LangChain
+langchain-core==1.6.1
+langchain-chroma==1.1.0
+langchain-huggingface==1.2.2
+langchain-text-splitters==1.1.2
+langchain-community==0.4.2
+
+# LLM providers
+langchain-deepseek
+langchain-google-genai==4.3.7
+openai
+
+# Google GenAI SDK
+google-genai==2.20.0
+
+# Vector database / embeddings
+chromadb==1.5.9
+sentence-transformers==6.0.0
+
+# PostgreSQL
+psycopg2-binary
+
+# MCP
+mcp==2.1.1
+
+# HTTP / Jira
+requests==2.34.2
+
+# Configuration
+python-dotenv==1.2.3
+
+# Data validation
+pydantic==2.13.4
