@@ -19,13 +19,14 @@ def get_router_llm():
     api_key = os.getenv("DEEPSEEK_API_KEY")
 
     if not api_key:
-        raise ValueError("DEEPSEEK_API_KEY is not set")
+        raise ValueError(
+            "DEEPSEEK_API_KEY is not set"
+        )
 
     return ChatDeepSeek(
         model="deepseek-chat",
         api_key=api_key,
     )
-
 
 def route_query(question: str) -> str:
 
@@ -36,27 +37,26 @@ def route_query(question: str) -> str:
     )
 
     prompt = f"""
-You are the routing controller for an Enterprise IT Support system.
+You are an IT request router. Choose exactly one:
 
-Choose exactly one route:
+RAG = static company knowledge/documents.
+DB = live information stored in PostgreSQL.
+MCP = direct interaction with Jira.
 
-RAG:
-Use when the user is asking about company policies,
-procedures, FAQs, documentation, working hours,
-troubleshooting instructions, or other static company knowledge.
+Examples:
+"standard working hours" -> RAG
+"employee department" -> DB
+"Jira account for employee" -> DB
+"get Jira project KAN details" -> MCP
+"create Jira project" -> MCP
+"create/assign/resolve Jira issue" -> MCP
+"add user to Jira project" -> MCP
 
-DB:
-Use when the user asks for live employee, project,
-system access, device configuration, or Jira account
-information stored in PostgreSQL.
-
-MCP:
-Use when the user wants to perform an action in Jira,
-such as creating a project, creating an issue,
-assigning an issue, resolving an issue, or adding
-a user to a project.
-
-Return only the appropriate route.
+Important:
+Any request about a Jira project, Jira issue, or
+performing an operation directly in Jira -> MCP,
+unless it specifically asks for an employee's
+Jira account stored in PostgreSQL.
 
 User query:
 {question}

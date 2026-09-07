@@ -1,17 +1,22 @@
 from typing import List, Literal
 
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import (
+    ChatGoogleGenerativeAI,
+)
 from pydantic import BaseModel
 
 from .retriever import get_retriever
+from .mcp.retriever import (
+    get_instructions_for_llm,
+)
 
 
 load_dotenv()
 
 
 # ---------------------------------------------------------
-# Structured response schema
+# Company-document RAG response
 # ---------------------------------------------------------
 
 class ContentBlock(BaseModel):
@@ -20,10 +25,11 @@ class ContentBlock(BaseModel):
         "list",
         "steps",
         "warning",
-        "note"
+        "note",
     ]
 
     text: str | None = None
+
     items: List[str] | None = None
 
 
@@ -33,14 +39,18 @@ class Source(BaseModel):
 
 
 class RAGResponse(BaseModel):
-    type: Literal["rag_response"] = "rag_response"
+    type: Literal[
+        "rag_response"
+    ] = "rag_response"
+
     status: Literal[
         "success",
         "no_result",
-        "error"
+        "error",
     ]
 
     title: str
+
     summary: str
 
     content: List[ContentBlock]
@@ -51,7 +61,7 @@ class RAGResponse(BaseModel):
 
 
 # ---------------------------------------------------------
-# LLM
+# Company-document RAG LLM
 # ---------------------------------------------------------
 
 def create_llm():
@@ -62,16 +72,12 @@ def create_llm():
 
 
 # ---------------------------------------------------------
-# RAG
+# Company-document RAG
 # ---------------------------------------------------------
 
 def ask_question(
     question: str,
 ):
-
-    # -----------------------------------------------------
-    # 1. Retrieve relevant chunks
-    # -----------------------------------------------------
 
     retriever = get_retriever(
         top_k=3
@@ -81,34 +87,30 @@ def ask_question(
         question
     )
 
-    # -----------------------------------------------------
-    # 2. No results
-    # -----------------------------------------------------
-
     if not documents:
 
         return RAGResponse(
             status="no_result",
+
             title="Information Not Found",
+
             summary=(
                 "I could not find this information "
                 "in the company documents."
             ),
+
             content=[
                 ContentBlock(
                     type="text",
                     text=(
                         "I could not find this information "
                         "in the company documents."
-                    )
+                    ),
                 )
             ],
+
             sources=[],
         )
-
-    # -----------------------------------------------------
-    # 3. Build context
-    # -----------------------------------------------------
 
     context_parts = []
 
@@ -118,7 +120,7 @@ def ask_question(
 
         source = document.metadata.get(
             "source",
-            "Unknown"
+            "Unknown",
         )
 
         context_parts.append(
@@ -139,19 +141,11 @@ SOURCE: {source}
         context_parts
     )
 
-    # -----------------------------------------------------
-    # 4. Structured Gemini
-    # -----------------------------------------------------
-
     llm = create_llm()
 
     structured_llm = llm.with_structured_output(
         RAGResponse
     )
-
-    # -----------------------------------------------------
-    # 5. Prompt
-    # -----------------------------------------------------
 
     prompt = f"""
 You are a company knowledge assistant.
@@ -163,16 +157,15 @@ Rules:
 
 - Do not use outside knowledge.
 - Do not invent information.
-- Use "text" for normal explanations.
+- Use "text" for explanations.
 - Use "list" for bullet-point information.
-- Use "steps" for procedures and troubleshooting.
+- Use "steps" for procedures or troubleshooting.
 - Use "warning" for important cautions.
-- Use "note" for additional information.
-- Keep the response concise.
+- Keep the answer concise.
 - Set needs_action to false.
 
-If the answer cannot be found in the context,
-set status to "no_result".
+If the context does not contain the answer,
+return status="no_result".
 
 Company document context:
 -------------------------
@@ -183,17 +176,9 @@ User question:
 {question}
 """
 
-    # -----------------------------------------------------
-    # 6. Generate structured response
-    # -----------------------------------------------------
-
     response = structured_llm.invoke(
         prompt
     )
-
-    # -----------------------------------------------------
-    # 7. Add retrieved sources
-    # -----------------------------------------------------
 
     response.sources = sources
 
@@ -201,7 +186,29 @@ User question:
 
 
 # ---------------------------------------------------------
-# Test
+# MCP instruction RAG
+# ---------------------------------------------------------
+
+def get_mcp_instructions(
+    query: str,
+    top_k: int = 1,
+) -> str:
+    """
+    Retrieve MCP tool instructions relevant to
+    the user's request.
+
+    This is intentionally separate from the
+    company-document RAG.
+    """
+
+    return get_instructions_for_llm(
+        query=query,
+        top_k=top_k,
+    )
+
+
+# ---------------------------------------------------------
+# Local test
 # ---------------------------------------------------------
 
 if __name__ == "__main__":
@@ -233,4 +240,3 @@ if __name__ == "__main__":
                 indent=2
             )
         )
-        

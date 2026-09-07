@@ -3,10 +3,14 @@ import json
 from .llm.llm_deepseek import get_deepseek_client
 from .llm.tool_definitions import TOOL_DEFINITIONS
 
+from .authorization import authorize_tool_call
+
 from .tools.get_employee import get_employee_details
 from .tools.get_project import get_project_details
 from .tools.get_system_access import get_system_access
-from .tools.get_employee_configurations import get_employee_configurations
+from .tools.get_employee_configurations import (
+    get_employee_configurations,
+)
 from .tools.get_jira_accounts import get_jira_account
 
 
@@ -19,7 +23,18 @@ TOOL_FUNCTIONS = {
 }
 
 
-def run_tool_call(question: str):
+def run_tool_call(
+    question: str,
+    employee_id: str,
+    hitl_approved: bool = False,
+    hitl_id: str | None = None,
+    approved_by: str | None = None,
+):
+
+    if not employee_id:
+        raise ValueError(
+            "Authenticated employee ID is required."
+        )
 
     client = get_deepseek_client()
 
@@ -27,12 +42,24 @@ def run_tool_call(question: str):
         model="deepseek-chat",
         messages=[
             {
+                "role": "system",
+                "content": (
+                    "You are an enterprise IT support assistant. "
+                    "Select the appropriate database tool for the user's request. "
+                    "If the user says 'my', 'me', or 'myself', "
+                    f"use employee ID '{employee_id}'. "
+                    "If the user explicitly provides another employee ID, "
+                    "use that employee ID. "
+                    "Do not invent employee IDs."
+                ),
+            },
+            {
                 "role": "user",
-                "content": question
-            }
+                "content": question,
+            },
         ],
         tools=TOOL_DEFINITIONS,
-        tool_choice="auto"
+        tool_choice="auto",
     )
 
     message = response.choices[0].message
@@ -40,7 +67,7 @@ def run_tool_call(question: str):
     if not message.tool_calls:
         return {
             "type": "text",
-            "content": message.content
+            "content": message.content,
         }
 
     results = []
@@ -53,51 +80,112 @@ def run_tool_call(question: str):
             tool_call.function.arguments
         )
 
-        tool_function = TOOL_FUNCTIONS.get(tool_name)
+        tool_function = TOOL_FUNCTIONS.get(
+            tool_name
+        )
 
         if not tool_function:
             raise ValueError(
                 f"Unknown tool: {tool_name}"
             )
 
-        result = tool_function(**arguments)
+        # -------------------------------------------------
+        # Resolve "my" requests to authenticated employee
+        # -------------------------------------------------
 
-        results.append({
-            "tool": tool_name,
-            "result": result
-        })
+        if (
+            tool_name
+            in {
+                "get_employee_details",
+                "get_system_access",
+                "get_employee_configurations",
+                "get_jira_account",
+            }
+            and not arguments.get("employee_id")
+        ):
+            arguments["employee_id"] = employee_id
+
+        target_employee_id = arguments.get(
+            "employee_id"
+        )
+
+        # -------------------------------------------------
+        # Authorization
+        # -------------------------------------------------
+
+        authorize_tool_call(
+            tool_name=tool_name,
+            requester_id=employee_id,
+            arguments=arguments,
+            hitl_approved=hitl_approved,
+            hitl_id=hitl_id,
+            approved_by=approved_by,
+        )
+
+        # -------------------------------------------------
+        # Execute tool
+        # -------------------------------------------------
+
+        result = tool_function(
+            **arguments
+        )
+
+        results.append(
+            {
+                "tool": tool_name,
+                "target_employee_id": target_employee_id,
+                "result": result,
+            }
+        )
 
     return results
 
+
 if __name__ == "__main__":
 
-    print("=" * 60)
-    print("PostgreSQL Tool Calling")
-    print("=" * 60)
+    employee_id = input(
+        "Employee ID: "
+    ).strip()
 
-    while True:
+    question = input(
+        "You: "
+    ).strip()
 
-        question = input("\nYou: ").strip()
+    try:
 
-        if question.lower() in {"exit", "quit"}:
-            print("Exiting...")
-            break
+        result = run_tool_call(
+            question,
+            employee_id=employee_id,
+        )
 
-        if not question:
-            continue
-
-        try:
-
-            result = run_tool_call(question)
-
-            print("\nResult:")
-            print(json.dumps(
+        print(
+            json.dumps(
                 result,
                 indent=2,
-                default=str
-            ))
+                default=str,
+            )
+        )
 
-        except Exception as e:
+    except PermissionError as e:
 
-            print("\nError:")
-            print(str(e))
+        print(
+            json.dumps(
+                {
+                    "status": "denied",
+                    "message": str(e),
+                },
+                indent=2,
+            )
+        )
+
+    except Exception as e:
+
+        print(
+            json.dumps(
+                {
+                    "status": "error",
+                    "message": str(e),
+                },
+                indent=2,
+            )
+        )

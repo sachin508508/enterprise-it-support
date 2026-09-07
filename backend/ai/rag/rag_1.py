@@ -1,22 +1,30 @@
 import os
-from typing import List, Literal, Union
+from typing import List, Literal
 
 from dotenv import load_dotenv
 from langchain_deepseek import ChatDeepSeek
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .retriever import get_retriever
+from .mcp.retriever import get_instructions_for_llm
 
 
 load_dotenv()
 
 
 # ---------------------------------------------------------
-# Structured response schema
+# Structured RAG response
 # ---------------------------------------------------------
 
 class ContentBlock(BaseModel):
-    type: Literal["text", "list", "steps", "warning", "note"]
+    type: Literal[
+        "text",
+        "list",
+        "steps",
+        "warning",
+        "note",
+    ]
+
     text: str | None = None
     items: List[str] | None = None
 
@@ -28,16 +36,23 @@ class Source(BaseModel):
 
 class RAGResponse(BaseModel):
     type: Literal["rag_response"] = "rag_response"
-    status: Literal["success", "no_result", "error"]
+
+    status: Literal[
+        "success",
+        "no_result",
+        "error",
+    ]
+
     title: str
     summary: str
     content: List[ContentBlock]
     sources: List[Source]
+
     needs_action: bool = False
 
 
 # ---------------------------------------------------------
-# LLM
+# DeepSeek LLM
 # ---------------------------------------------------------
 
 def create_llm():
@@ -45,7 +60,9 @@ def create_llm():
     api_key = os.getenv("DEEPSEEK_API_KEY")
 
     if not api_key:
-        raise ValueError("DEEPSEEK_API_KEY is not set")
+        raise ValueError(
+            "DEEPSEEK_API_KEY is not set"
+        )
 
     return ChatDeepSeek(
         model="deepseek-chat",
@@ -54,46 +71,55 @@ def create_llm():
 
 
 # ---------------------------------------------------------
-# RAG
+# Company-document RAG
 # ---------------------------------------------------------
 
 def ask_question(question: str):
 
-    # 1. Retrieve
+    # Retrieve company documents
     retriever = get_retriever(top_k=3)
 
     documents = retriever.invoke(question)
 
-    # 2. No results
+    # No results
     if not documents:
+
         return RAGResponse(
             status="no_result",
             title="Information Not Found",
-            summary="I could not find this information in the company documents.",
+            summary=(
+                "I could not find this information "
+                "in the company documents."
+            ),
             content=[
                 ContentBlock(
                     type="text",
-                    text="I could not find this information in the company documents."
+                    text=(
+                        "I could not find this information "
+                        "in the company documents."
+                    ),
                 )
             ],
             sources=[],
         )
 
-    # 3. Build context
+    # Build context + sources
     context_parts = []
-
     sources = []
 
     for document in documents:
 
         source = document.metadata.get(
             "source",
-            "Unknown"
+            "Unknown",
         )
 
         context_parts.append(
-            f"SOURCE: {source}\n\n"
-            f"{document.page_content}"
+            f"""
+SOURCE: {source}
+
+{document.page_content}
+"""
         )
 
         sources.append(
@@ -104,14 +130,14 @@ def ask_question(question: str):
 
     context = "\n\n".join(context_parts)
 
-    # 4. Structured LLM
+    # Structured DeepSeek output
     llm = create_llm()
 
     structured_llm = llm.with_structured_output(
         RAGResponse
     )
 
-    # 5. Prompt
+    # Prompt
     prompt = f"""
 You are a company knowledge assistant.
 
@@ -122,9 +148,9 @@ Rules:
 - Do not use outside knowledge.
 - Do not invent information.
 - Use "text" for explanations.
-- Use "list" for bullet-point information.
-- Use "steps" for procedures or troubleshooting.
-- Use "warning" for important cautions.
+- Use "list" for bullet points.
+- Use "steps" for procedures.
+- Use "warning" for cautions.
 - Keep the answer concise.
 - Set needs_action to false.
 
@@ -140,7 +166,6 @@ User question:
 {question}
 """
 
-    # 6. Generate structured response
     response = structured_llm.invoke(prompt)
 
     # Add retrieved sources
@@ -150,16 +175,35 @@ User question:
 
 
 # ---------------------------------------------------------
-# Test
+# MCP instruction RAG
+# ---------------------------------------------------------
+
+def get_mcp_instructions(
+    query: str,
+    top_k: int = 1,
+) -> str:
+
+    return get_instructions_for_llm(
+        query=query,
+        top_k=top_k,
+    )
+
+
+# ---------------------------------------------------------
+# Local test
 # ---------------------------------------------------------
 
 if __name__ == "__main__":
 
-    question = input("\nAsk a question: ").strip()
+    question = input(
+        "\nAsk a question: "
+    ).strip()
 
     if question:
 
-        response = ask_question(question)
+        response = ask_question(
+            question
+        )
 
         print("\n" + "=" * 70)
         print("STRUCTURED RAG RESPONSE")

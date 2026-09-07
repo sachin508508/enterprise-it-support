@@ -8,8 +8,18 @@ from mcp.client.stdio import stdio_client
 
 from .state import GraphState
 
-from ..rag.rag import ask_question
-from ..tool_call.runner import run_tool_call
+from ..rag.rag_1 import (
+    ask_question,
+    get_mcp_instructions,
+)
+
+from ..tool_call.runner import (
+    run_tool_call,
+)
+
+from ..tool_call.access_control import (
+    get_employee_role,
+)
 
 
 load_dotenv()
@@ -19,14 +29,22 @@ load_dotenv()
 # RAG NODE
 # ============================================================
 
-def rag_node(state: GraphState) -> GraphState:
+def rag_node(
+    state: GraphState,
+) -> GraphState:
 
     question = state["user_query"]
 
     try:
-        result = ask_question(question)
 
-        if hasattr(result, "model_dump"):
+        result = ask_question(
+            question
+        )
+
+        if hasattr(
+            result,
+            "model_dump",
+        ):
             result = result.model_dump()
 
         return {
@@ -50,13 +68,38 @@ def rag_node(state: GraphState) -> GraphState:
 # DATABASE NODE
 # ============================================================
 
-def db_node(state: GraphState) -> GraphState:
+def db_node(
+    state: GraphState,
+) -> GraphState:
 
     question = state["user_query"]
 
+    employee_id = state.get(
+        "employee_id"
+    )
+
     try:
 
-        result = run_tool_call(question)
+        if not employee_id:
+
+            raise ValueError(
+                "Authenticated employee ID is missing."
+            )
+
+        result = run_tool_call(
+            question,
+            employee_id=employee_id,
+            hitl_approved=state.get(
+                "hitl_approved",
+                False,
+            ),
+            hitl_id=state.get(
+                "hitl_id"
+            ),
+            approved_by=state.get(
+                "approved_by"
+            ),
+        )
 
         return {
             **state,
@@ -79,19 +122,118 @@ def db_node(state: GraphState) -> GraphState:
 # MCP NODE
 # ============================================================
 
-async def mcp_node(state: GraphState) -> GraphState:
+async def mcp_node(
+    state: GraphState,
+) -> GraphState:
 
     question = state["user_query"]
 
-    server_params = StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "ai.mcp.server"],
-        env=os.environ.copy(),
+    employee_id = state.get(
+        "employee_id"
+    )
+
+    if not employee_id:
+        raise ValueError(
+            "Authenticated employee ID is required "
+            "for MCP operations."
+        )
+
+    hitl_approved = state.get(
+        "hitl_approved",
+        False,
+    )
+
+    hitl_id = state.get(
+        "hitl_id"
+    )
+
+    approved_by = state.get(
+        "approved_by"
     )
 
     try:
 
-        async with stdio_client(server_params) as (
+        # ----------------------------------------------------
+        # 1. Get requester role
+        # ----------------------------------------------------
+
+        role = get_employee_role(
+            employee_id
+        )
+
+        if role is None:
+
+            raise PermissionError(
+                "Employee role could not be determined."
+            )
+
+        # ----------------------------------------------------
+        # 2. Retrieve MCP instructions
+        # ----------------------------------------------------
+
+        instructions = get_mcp_instructions(
+            question,
+            top_k=1,
+        )
+
+        if not instructions:
+
+            return {
+                **state,
+                "mcp_result": {
+                    "status": "error",
+                    "message": (
+                        "No relevant MCP instruction "
+                        "was found for this request."
+                    ),
+                },
+                "error": (
+                    "No relevant MCP instruction "
+                    "was found."
+                ),
+            }
+
+        # ----------------------------------------------------
+        # 3. Start MCP server
+        # ----------------------------------------------------
+
+        mcp_env = os.environ.copy()
+
+        mcp_env[
+            "MCP_EMPLOYEE_ID"
+        ] = employee_id
+
+        # HITL execution context
+        mcp_env[
+            "MCP_HITL_APPROVED"
+        ] = str(
+            hitl_approved
+        ).lower()
+
+        if hitl_id:
+            mcp_env[
+                "MCP_HITL_ID"
+            ] = hitl_id
+
+        if approved_by:
+            mcp_env[
+                "MCP_APPROVED_BY"
+            ] = approved_by
+
+        server_params = (
+            StdioServerParameters(
+                command=sys.executable,
+                args=[
+                    "-m",
+                    "backend.ai.mcp.server",
+                ],
+                env=mcp_env,
+            )
+        )
+
+        async with stdio_client(
+            server_params
+        ) as (
             read,
             write,
         ):
@@ -102,26 +244,32 @@ async def mcp_node(state: GraphState) -> GraphState:
             ) as session:
 
                 # ------------------------------------------------
-                # Initialize MCP connection
+                # 4. Initialize MCP
                 # ------------------------------------------------
 
                 await session.initialize()
 
                 # ------------------------------------------------
-                # Get available MCP tools
+                # 5. Discover tools
                 # ------------------------------------------------
 
-                tools_result = await session.list_tools()
+                tools_result = (
+                    await session.list_tools()
+                )
 
-                tools = tools_result.tools
+                tools = (
+                    tools_result.tools
+                )
 
                 if not tools:
+
                     raise RuntimeError(
-                        "MCP server started, but no tools were discovered."
+                        "MCP server started, but no tools "
+                        "were discovered."
                     )
 
                 # ------------------------------------------------
-                # Build tool descriptions
+                # 6. Build tool descriptions
                 # ------------------------------------------------
 
                 tool_descriptions = []
@@ -131,34 +279,69 @@ async def mcp_node(state: GraphState) -> GraphState:
                     tool_descriptions.append(
                         {
                             "name": tool.name,
-                            "description": tool.description or "",
-                            "input_schema": tool.input_schema,
+                            "description": (
+                                tool.description
+                                or ""
+                            ),
+                            "input_schema": (
+                                tool.input_schema
+                            ),
                         }
                     )
 
                 # ------------------------------------------------
-                # DeepSeek selects MCP tool
+                # 7. DeepSeek selects MCP tool
                 # ------------------------------------------------
 
-                from langchain_deepseek import ChatDeepSeek
+                from langchain_deepseek import (
+                    ChatDeepSeek,
+                )
 
                 llm = ChatDeepSeek(
                     model="deepseek-chat",
-                    api_key=os.getenv("DEEPSEEK_API_KEY"),
+                    api_key=os.getenv(
+                        "DEEPSEEK_API_KEY"
+                    ),
                 )
 
                 prompt = f"""
 You are an enterprise IT assistant.
 
-Select exactly one MCP tool that can perform the
-user's requested Jira operation.
+The user wants to perform a Jira operation.
 
-Available MCP tools:
+The following instruction was retrieved from
+the MCP instruction knowledge base.
 
-{json.dumps(tool_descriptions, indent=2)}
+IMPORTANT:
+The instruction is guidance for selecting the
+correct operation.
 
-User request:
+Actual authorization is enforced separately by
+the MCP server.
+
+RETRIEVED MCP INSTRUCTION:
+-------------------------
+{instructions}
+-------------------------
+
+REQUESTER INFORMATION:
+-------------------------
+Employee ID: {employee_id}
+Role: {role}
+-------------------------
+
+AVAILABLE MCP TOOLS:
+-------------------------
+{json.dumps(
+    tool_descriptions,
+    indent=2,
+)}
+-------------------------
+
+USER REQUEST:
+-------------------------
 {question}
+-------------------------
 
 Return ONLY valid JSON:
 
@@ -170,41 +353,75 @@ Return ONLY valid JSON:
 }}
 
 Rules:
-- Use only the available tools.
+
+- Select exactly one available MCP tool.
+- Follow the retrieved MCP instruction.
 - Use only arguments defined by the selected tool.
 - Do not invent tool names.
-- Do not invent required arguments.
+- Do not invent required information.
+- Do not invent IDs.
 - Do not add unnecessary arguments.
+- If required information is missing, do not invent it.
 """
 
-                response = await llm.ainvoke(prompt)
+                response = await llm.ainvoke(
+                    prompt
+                )
 
                 content = response.content
 
-                if isinstance(content, list):
+                if isinstance(
+                    content,
+                    list,
+                ):
+
                     content = "".join(
-                        item.get("text", "")
-                        if isinstance(item, dict)
+                        item.get(
+                            "text",
+                            "",
+                        )
+                        if isinstance(
+                            item,
+                            dict,
+                        )
                         else str(item)
                         for item in content
                     )
 
                 # ------------------------------------------------
-                # Parse LLM decision
+                # 8. Parse decision
                 # ------------------------------------------------
 
-                decision = json.loads(content)
+                decision = json.loads(
+                    content
+                )
 
-                tool_name = decision.get("tool_name")
-                arguments = decision.get("arguments", {})
+                tool_name = decision.get(
+                    "tool_name"
+                )
+
+                arguments = decision.get(
+                    "arguments",
+                    {},
+                )
 
                 if not tool_name:
+
                     raise ValueError(
                         "LLM did not return a tool_name."
                     )
 
+                if not isinstance(
+                    arguments,
+                    dict,
+                ):
+
+                    raise ValueError(
+                        "MCP arguments must be an object."
+                    )
+
                 # ------------------------------------------------
-                # Validate selected tool
+                # 9. Validate tool
                 # ------------------------------------------------
 
                 available_tool_names = {
@@ -212,15 +429,18 @@ Rules:
                     for tool in tools
                 }
 
-                if tool_name not in available_tool_names:
+                if (
+                    tool_name
+                    not in available_tool_names
+                ):
+
                     raise ValueError(
-                        f"Unknown MCP tool selected: {tool_name}. "
-                        f"Available tools: "
-                        f"{sorted(available_tool_names)}"
+                        f"Unknown MCP tool selected: "
+                        f"{tool_name}"
                     )
 
                 # ------------------------------------------------
-                # Execute MCP tool
+                # 10. Execute MCP tool
                 # ------------------------------------------------
 
                 result = await session.call_tool(
@@ -228,15 +448,20 @@ Rules:
                     arguments,
                 )
 
-                # ------------------------------------------------
-                # Return result
-                # ------------------------------------------------
+                if hasattr(
+                    result,
+                    "model_dump",
+                ):
 
-                if hasattr(result, "model_dump"):
-                    result_data = result.model_dump()
+                    result_data = (
+                        result.model_dump()
+                    )
 
                 else:
-                    result_data = str(result)
+
+                    result_data = str(
+                        result
+                    )
 
                 return {
                     **state,
@@ -274,6 +499,7 @@ Rules:
             "error": str(e),
         }
 
+
 # ============================================================
 # FINAL RESPONSE
 # ============================================================
@@ -282,18 +508,30 @@ def final_response_node(
     state: GraphState,
 ) -> GraphState:
 
-    route = state.get("route")
+    route = state.get(
+        "route"
+    )
 
     if route == "rag":
-        result = state.get("rag_result")
+
+        result = state.get(
+            "rag_result"
+        )
 
     elif route == "db":
-        result = state.get("db_result")
+
+        result = state.get(
+            "db_result"
+        )
 
     elif route == "mcp":
-        result = state.get("mcp_result")
+
+        result = state.get(
+            "mcp_result"
+        )
 
     else:
+
         result = {
             "status": "error",
             "message": "Unknown route",
