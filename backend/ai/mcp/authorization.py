@@ -3,6 +3,10 @@ from ..tool_call.access_control import (
     get_role_level,
 )
 
+from ..tool_call.authorization import (
+    verify_hitl_approval,
+)
+
 
 MCP_TOOL_LEVELS = {
     # Level 1+
@@ -25,6 +29,10 @@ def authorize_mcp_tool(
     approved_by: str | None = None,
 ) -> None:
 
+    # ---------------------------------------------------------
+    # Validate MCP tool
+    # ---------------------------------------------------------
+
     required_level = MCP_TOOL_LEVELS.get(
         tool_name
     )
@@ -33,6 +41,10 @@ def authorize_mcp_tool(
         raise PermissionError(
             f"MCP tool '{tool_name}' is not authorized."
         )
+
+    # ---------------------------------------------------------
+    # Get requester role
+    # ---------------------------------------------------------
 
     role = get_employee_role(
         employee_id
@@ -57,8 +69,15 @@ def authorize_mcp_tool(
     # ---------------------------------------------------------
     # HITL authorization
     #
-    # A lower-privileged employee may proceed only when
-    # this execution was explicitly approved by an admin.
+    # Lower-privileged users may proceed only when:
+    #
+    # 1. HITL execution was explicitly approved.
+    # 2. A valid HITL request ID is supplied.
+    # 3. An approving administrator is supplied.
+    # 4. The HITL request belongs to the requester.
+    # 5. The HITL request is actually approved.
+    # 6. The recorded reviewer matches approved_by.
+    # 7. The reviewer currently has admin privileges.
     # ---------------------------------------------------------
 
     if hitl_approved:
@@ -71,6 +90,17 @@ def authorize_mcp_tool(
         if not approved_by:
             raise PermissionError(
                 "HITL approving administrator is required."
+            )
+
+        approval_valid = verify_hitl_approval(
+            hitl_id=hitl_id,
+            requester_id=employee_id,
+            approved_by=approved_by,
+        )
+
+        if not approval_valid:
+            raise PermissionError(
+                "The HITL approval is invalid or no longer active."
             )
 
         return

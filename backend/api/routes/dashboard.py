@@ -7,7 +7,7 @@ from ..auth.dependencies import (
     get_current_employee,
 )
 
-from ..dashboard_repository import (
+from ..repositories.dashboard import (
     get_dashboard_data,
 )
 

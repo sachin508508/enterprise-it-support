@@ -8,7 +8,7 @@ from ..auth.dependencies import (
     get_current_employee,
 )
 
-from ..hitl_repository import (
+from ..repositories.hitl import (
     create_hitl_request,
     get_all_hitl_requests,
     get_hitl_request,
@@ -16,7 +16,7 @@ from ..hitl_repository import (
     review_hitl_request,
 )
 
-from ..hitl_execution import (
+from ..services.hitl_execution import (
     execute_approved_hitl,
 )
 

@@ -1,4 +1,4 @@
-from ..tool_call.db.connection import get_db_connection
+from ...core.database.connection import get_db_connection
 
 
 ROLE_LEVELS = {

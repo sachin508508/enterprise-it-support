@@ -1,12 +1,6 @@
 from typing import Any
 
-from .conversation_repository import (
-    get_conversations,
-)
-
-from ..ai.tool_call.db.connection import (
-    get_db_connection,
-)
+from ...core.database.connection import get_db_connection
 
 
 def get_dashboard_data(
@@ -125,21 +119,20 @@ def get_dashboard_data(
         ]
 
         return {
-            "total_queries": total_queries,
-            "rag_queries": rag_queries,
-            "action_queries": action_queries,
-            "system_information_queries": (
-                system_information_queries
+            "total_queries": int(total_queries or 0),
+            "rag_queries": int(rag_queries or 0),
+            "action_queries": int(action_queries or 0),
+            "system_information_queries": int(
+                system_information_queries or 0
             ),
-            "successful": successful,
-            "failed": failed,
-            "denied": denied,
-            "hitl_pending": hitl_pending,
+            "successful": int(successful or 0),
+            "failed": int(failed or 0),
+            "denied": int(denied or 0),
+            "hitl_pending": int(hitl_pending or 0),
             "recent_activity": recent_activity,
         }
 
     finally:
-
         if cursor:
             cursor.close()
 

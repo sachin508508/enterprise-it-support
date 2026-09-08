@@ -5,10 +5,12 @@ import sys
 from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from langchain_deepseek import ChatDeepSeek
 
 from .state import GraphState
+from .response_formatter import build_final_response
 
-from ..rag.rag_1 import (
+from ..rag.deepseek import (
     ask_question,
     get_mcp_instructions,
 )
@@ -119,6 +121,92 @@ def db_node(
 
 
 # ============================================================
+# MCP HELPERS
+# ============================================================
+
+def _mcp_result_to_dict(
+    result,
+) -> dict:
+
+    if hasattr(
+        result,
+        "model_dump",
+    ):
+        data = result.model_dump()
+
+        if isinstance(data, dict):
+            return data
+
+    if isinstance(
+        result,
+        dict,
+    ):
+        return result
+
+    return {
+        "result": str(result),
+    }
+
+
+def _mcp_result_is_error(
+    result,
+) -> bool:
+
+    # MCP CallToolResult normally exposes isError.
+    if getattr(
+        result,
+        "isError",
+        False,
+    ):
+        return True
+
+    # Handle model_dump() output.
+    if hasattr(
+        result,
+        "model_dump",
+    ):
+
+        data = result.model_dump()
+
+        if isinstance(
+            data,
+            dict,
+        ):
+
+            if data.get("isError") is True:
+                return True
+
+            if data.get("is_error") is True:
+                return True
+
+            if data.get("status") in {
+                "error",
+                "failed",
+            }:
+                return True
+
+    # Handle dictionaries.
+    if isinstance(
+        result,
+        dict,
+    ):
+
+        if result.get("isError") is True:
+            return True
+
+        if result.get("is_error") is True:
+            return True
+
+        if result.get("status") in {
+            "error",
+            "failed",
+        }:
+            return True
+
+    return False
+
+
+# ============================================================
 # MCP NODE
 # ============================================================
 
@@ -132,29 +220,34 @@ async def mcp_node(
         "employee_id"
     )
 
-    if not employee_id:
-        raise ValueError(
-            "Authenticated employee ID is required "
-            "for MCP operations."
-        )
-
-    hitl_approved = state.get(
-        "hitl_approved",
-        False,
-    )
-
-    hitl_id = state.get(
-        "hitl_id"
-    )
-
-    approved_by = state.get(
-        "approved_by"
-    )
-
     try:
 
         # ----------------------------------------------------
-        # 1. Get requester role
+        # 1. Validate authenticated employee
+        # ----------------------------------------------------
+
+        if not employee_id:
+
+            raise ValueError(
+                "Authenticated employee ID is required "
+                "for MCP operations."
+            )
+
+        hitl_approved = state.get(
+            "hitl_approved",
+            False,
+        )
+
+        hitl_id = state.get(
+            "hitl_id"
+        )
+
+        approved_by = state.get(
+            "approved_by"
+        )
+
+        # ----------------------------------------------------
+        # 2. Get requester role
         # ----------------------------------------------------
 
         role = get_employee_role(
@@ -168,7 +261,7 @@ async def mcp_node(
             )
 
         # ----------------------------------------------------
-        # 2. Retrieve MCP instructions
+        # 3. Retrieve MCP instructions
         # ----------------------------------------------------
 
         instructions = get_mcp_instructions(
@@ -194,7 +287,7 @@ async def mcp_node(
             }
 
         # ----------------------------------------------------
-        # 3. Start MCP server
+        # 4. Start MCP server
         # ----------------------------------------------------
 
         mcp_env = os.environ.copy()
@@ -203,7 +296,6 @@ async def mcp_node(
             "MCP_EMPLOYEE_ID"
         ] = employee_id
 
-        # HITL execution context
         mcp_env[
             "MCP_HITL_APPROVED"
         ] = str(
@@ -211,24 +303,24 @@ async def mcp_node(
         ).lower()
 
         if hitl_id:
+
             mcp_env[
                 "MCP_HITL_ID"
             ] = hitl_id
 
         if approved_by:
+
             mcp_env[
                 "MCP_APPROVED_BY"
             ] = approved_by
 
-        server_params = (
-            StdioServerParameters(
-                command=sys.executable,
-                args=[
-                    "-m",
-                    "backend.ai.mcp.server",
-                ],
-                env=mcp_env,
-            )
+        server_params = StdioServerParameters(
+            command=sys.executable,
+            args=[
+                "-m",
+                "backend.ai.mcp.server",
+            ],
+            env=mcp_env,
         )
 
         async with stdio_client(
@@ -244,13 +336,13 @@ async def mcp_node(
             ) as session:
 
                 # ------------------------------------------------
-                # 4. Initialize MCP
+                # 5. Initialize MCP
                 # ------------------------------------------------
 
                 await session.initialize()
 
                 # ------------------------------------------------
-                # 5. Discover tools
+                # 6. Discover tools
                 # ------------------------------------------------
 
                 tools_result = (
@@ -269,7 +361,7 @@ async def mcp_node(
                     )
 
                 # ------------------------------------------------
-                # 6. Build tool descriptions
+                # 7. Build tool descriptions
                 # ------------------------------------------------
 
                 tool_descriptions = []
@@ -290,18 +382,22 @@ async def mcp_node(
                     )
 
                 # ------------------------------------------------
-                # 7. DeepSeek selects MCP tool
+                # 8. DeepSeek selects MCP tool
                 # ------------------------------------------------
 
-                from langchain_deepseek import (
-                    ChatDeepSeek,
+                api_key = os.getenv(
+                    "DEEPSEEK_API_KEY"
                 )
+
+                if not api_key:
+
+                    raise ValueError(
+                        "DEEPSEEK_API_KEY is not set."
+                    )
 
                 llm = ChatDeepSeek(
                     model="deepseek-chat",
-                    api_key=os.getenv(
-                        "DEEPSEEK_API_KEY"
-                    ),
+                    api_key=api_key,
                 )
 
                 prompt = f"""
@@ -389,12 +485,21 @@ Rules:
                     )
 
                 # ------------------------------------------------
-                # 8. Parse decision
+                # 9. Parse DeepSeek decision
                 # ------------------------------------------------
 
-                decision = json.loads(
-                    content
-                )
+                try:
+
+                    decision = json.loads(
+                        content
+                    )
+
+                except json.JSONDecodeError as e:
+
+                    raise ValueError(
+                        "DeepSeek returned invalid "
+                        "JSON for MCP tool selection."
+                    ) from e
 
                 tool_name = decision.get(
                     "tool_name"
@@ -421,7 +526,7 @@ Rules:
                     )
 
                 # ------------------------------------------------
-                # 9. Validate tool
+                # 10. Validate selected tool
                 # ------------------------------------------------
 
                 available_tool_names = {
@@ -440,7 +545,7 @@ Rules:
                     )
 
                 # ------------------------------------------------
-                # 10. Execute MCP tool
+                # 11. Execute MCP tool
                 # ------------------------------------------------
 
                 result = await session.call_tool(
@@ -448,20 +553,34 @@ Rules:
                     arguments,
                 )
 
-                if hasattr(
-                    result,
-                    "model_dump",
+                result_data = _mcp_result_to_dict(
+                    result
+                )
+
+                # ------------------------------------------------
+                # 12. Detect actual MCP failure
+                # ------------------------------------------------
+
+                if _mcp_result_is_error(
+                    result
                 ):
 
-                    result_data = (
-                        result.model_dump()
-                    )
+                    return {
+                        **state,
+                        "mcp_result": {
+                            "status": "error",
+                            "tool": tool_name,
+                            "arguments": arguments,
+                            "result": result_data,
+                        },
+                        "error": (
+                            "MCP tool execution failed."
+                        ),
+                    }
 
-                else:
-
-                    result_data = str(
-                        result
-                    )
+                # ------------------------------------------------
+                # 13. Successful MCP execution
+                # ------------------------------------------------
 
                 return {
                     **state,
@@ -501,7 +620,7 @@ Rules:
 
 
 # ============================================================
-# FINAL RESPONSE
+# FINAL RESPONSE NODE
 # ============================================================
 
 def final_response_node(
@@ -534,14 +653,13 @@ def final_response_node(
 
         result = {
             "status": "error",
-            "message": "Unknown route",
+            "message": "Unknown route.",
         }
 
-    final_response = {
-        "status": "success",
-        "route": route,
-        "data": result,
-    }
+    final_response = build_final_response(
+        route=route,
+        result=result,
+    )
 
     return {
         **state,

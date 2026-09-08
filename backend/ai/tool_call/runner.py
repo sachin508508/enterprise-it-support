@@ -1,6 +1,6 @@
 import json
 
-from .llm.llm_deepseek import get_deepseek_client
+from .llm.deepseek import get_deepseek_client
 from .llm.tool_definitions import TOOL_DEFINITIONS
 
 from .authorization import authorize_tool_call

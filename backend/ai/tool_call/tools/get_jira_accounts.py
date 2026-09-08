@@ -1,6 +1,6 @@
 import psycopg2
 
-from ..db.connection import get_db_connection
+from ....core.database.connection import get_db_connection
 
 
 def get_jira_account(employee_id: str):

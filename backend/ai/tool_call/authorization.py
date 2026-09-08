@@ -4,7 +4,7 @@ from .access_control import (
     is_admin,
 )
 
-from .db.connection import get_db_connection
+from ...core.database.connection import get_db_connection
 
 
 EMPLOYEE_SCOPED_TOOLS = {

@@ -2,13 +2,20 @@ import json
 import uuid
 from typing import Any
 
-from .conversation_repository import (
-    get_conversation,
-)
+from .conversation import get_conversation
 
-from ..ai.tool_call.db.connection import (
+from ...core.database.connection import (
     get_db_connection,
 )
+
+
+HITL_PENDING = "pending"
+HITL_APPROVED = "approved"
+HITL_REJECTED = "rejected"
+
+EXECUTION_EXECUTING = "executing"
+EXECUTION_SUCCESSFUL = "successful"
+EXECUTION_FAILED = "failed"
 
 
 def create_hitl_request(
@@ -16,6 +23,13 @@ def create_hitl_request(
     employee_id: str,
     reason: str,
 ) -> dict[str, Any]:
+
+    reason = reason.strip()
+
+    if len(reason) < 5:
+        raise ValueError(
+            "A meaningful reason is required."
+        )
 
     conversation = get_conversation(
         conversation_id
@@ -48,6 +62,17 @@ def create_hitl_request(
         connection = get_db_connection()
         cursor = connection.cursor()
 
+        # -----------------------------------------------------
+        # Prevent duplicate active HITL requests.
+        #
+        # Active means:
+        # - pending review
+        # - approved and currently executing
+        #
+        # Completed executions (successful/failed) are no
+        # longer active and therefore allow a fresh submission.
+        # -----------------------------------------------------
+
         cursor.execute(
             """
             SELECT
@@ -63,9 +88,19 @@ def create_hitl_request(
                 execution_status,
                 execution_result,
                 executed_at
-            FROM hitl_requests
+            FROM public.hitl_requests
             WHERE conversation_id = %s
-              AND status = 'pending'
+              AND (
+                  status = 'pending'
+                  OR (
+                      status = 'approved'
+                      AND (
+                          execution_status IS NULL
+                          OR execution_status = 'executing'
+                      )
+                  )
+              )
+            ORDER BY created_at DESC
             LIMIT 1;
             """,
             (conversation_id,),
@@ -74,13 +109,29 @@ def create_hitl_request(
         existing = cursor.fetchone()
 
         if existing:
-            return _row_to_dict(existing)
 
-        hitl_id = str(uuid.uuid4())
+            existing_request = _row_to_dict(
+                existing
+            )
+
+            if (
+                existing_request["status"]
+                == HITL_PENDING
+            ):
+                return existing_request
+
+            raise ValueError(
+                "This request is already approved "
+                "and is currently being processed."
+            )
+
+        hitl_id = str(
+            uuid.uuid4()
+        )
 
         cursor.execute(
             """
-            INSERT INTO hitl_requests (
+            INSERT INTO public.hitl_requests (
                 id,
                 conversation_id,
                 employee_id,
@@ -122,7 +173,9 @@ def create_hitl_request(
 
         connection.commit()
 
-        return _row_to_dict(row)
+        return _row_to_dict(
+            row
+        )
 
     except Exception:
 
@@ -167,7 +220,7 @@ def get_hitl_requests_for_employee(
                 execution_status,
                 execution_result,
                 executed_at
-            FROM hitl_requests
+            FROM public.hitl_requests
             WHERE employee_id = %s
             ORDER BY created_at DESC;
             """,
@@ -219,7 +272,7 @@ def get_all_hitl_requests(
                     execution_status,
                     execution_result,
                     executed_at
-                FROM hitl_requests
+                FROM public.hitl_requests
                 WHERE status = %s
                 ORDER BY created_at DESC;
                 """,
@@ -243,7 +296,7 @@ def get_all_hitl_requests(
                     execution_status,
                     execution_result,
                     executed_at
-                FROM hitl_requests
+                FROM public.hitl_requests
                 ORDER BY created_at DESC;
                 """
             )
@@ -291,7 +344,7 @@ def get_hitl_request(
                 execution_status,
                 execution_result,
                 executed_at
-            FROM hitl_requests
+            FROM public.hitl_requests
             WHERE id = %s;
             """,
             (hitl_id,),
@@ -302,7 +355,9 @@ def get_hitl_request(
         if row is None:
             return None
 
-        return _row_to_dict(row)
+        return _row_to_dict(
+            row
+        )
 
     finally:
 
@@ -321,11 +376,23 @@ def review_hitl_request(
 ) -> dict[str, Any]:
 
     if status not in {
-        "approved",
-        "rejected",
+        HITL_APPROVED,
+        HITL_REJECTED,
     }:
         raise ValueError(
             "Review status must be 'approved' or 'rejected'."
+        )
+
+    if (
+        status == HITL_REJECTED
+        and (
+            review_comment is None
+            or not review_comment.strip()
+        )
+    ):
+        raise ValueError(
+            "A review comment is required when rejecting "
+            "a HITL request."
         )
 
     connection = None
@@ -351,7 +418,7 @@ def review_hitl_request(
                 execution_status,
                 execution_result,
                 executed_at
-            FROM hitl_requests
+            FROM public.hitl_requests
             WHERE id = %s
             FOR UPDATE;
             """,
@@ -365,14 +432,14 @@ def review_hitl_request(
                 "HITL request not found."
             )
 
-        if row[4] != "pending":
+        if row[4] != HITL_PENDING:
             raise ValueError(
                 "This HITL request has already been reviewed."
             )
 
         cursor.execute(
             """
-            UPDATE hitl_requests
+            UPDATE public.hitl_requests
             SET
                 status = %s,
                 reviewed_by = %s,
@@ -396,7 +463,9 @@ def review_hitl_request(
             (
                 status,
                 reviewer_id,
-                review_comment,
+                review_comment.strip()
+                if review_comment
+                else None,
                 hitl_id,
             ),
         )
@@ -439,7 +508,7 @@ def mark_execution_started(
 
         cursor.execute(
             """
-            UPDATE hitl_requests
+            UPDATE public.hitl_requests
             SET execution_status = 'executing'
             WHERE id = %s
               AND status = 'approved'
@@ -473,7 +542,9 @@ def mark_execution_started(
 
         connection.commit()
 
-        return _row_to_dict(row)
+        return _row_to_dict(
+            row
+        )
 
     except Exception:
 
@@ -498,8 +569,8 @@ def save_execution_result(
 ) -> dict[str, Any]:
 
     if execution_status not in {
-        "successful",
-        "failed",
+        EXECUTION_SUCCESSFUL,
+        EXECUTION_FAILED,
     }:
         raise ValueError(
             "Invalid execution status."
@@ -515,7 +586,7 @@ def save_execution_result(
 
         cursor.execute(
             """
-            UPDATE hitl_requests
+            UPDATE public.hitl_requests
             SET
                 execution_status = %s,
                 execution_result = %s::jsonb,
@@ -553,7 +624,9 @@ def save_execution_result(
 
         connection.commit()
 
-        return _row_to_dict(row)
+        return _row_to_dict(
+            row
+        )
 
     except Exception:
 

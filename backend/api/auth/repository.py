@@ -1,8 +1,8 @@
-from ..conversation_repository import (
+from ..repositories.conversation import (
     _make_json_serializable,
 )
 
-from ...ai.tool_call.db.connection import (
+from ...core.database.connection import (
     get_db_connection,
 )
 

@@ -3,15 +3,17 @@ from pathlib import Path
 from langchain_chroma import Chroma
 
 from .embeddings import create_embeddings
+from .vector_store import COLLECTION_NAME
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[3]
 
 CHROMA_PATH = (
-    BASE_DIR / "chroma_db"
+    BASE_DIR
+    / "data"
+    / "chroma"
+    / "company"
 )
-
-COLLECTION_NAME = "company_documents"
 
 
 def get_retriever(

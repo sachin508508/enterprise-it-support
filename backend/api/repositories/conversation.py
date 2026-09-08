@@ -2,11 +2,11 @@ from typing import Any
 
 from psycopg2.extras import Json
 
-from .conversation_timeline import (
+from ..services.conversation_timeline import (
     build_conversation_timeline,
 )
 
-from ..ai.tool_call.db.connection import (
+from ...core.database.connection import (
     get_db_connection,
 )
 
@@ -18,31 +18,86 @@ def _make_json_serializable(
     if isinstance(value, dict):
 
         return {
-            str(key): _make_json_serializable(
-                item
-            )
+            str(key): _make_json_serializable(item)
             for key, item in value.items()
         }
 
     if isinstance(value, list):
 
         return [
-            _make_json_serializable(
-                item
-            )
+            _make_json_serializable(item)
             for item in value
         ]
 
     if isinstance(value, tuple):
 
         return [
-            _make_json_serializable(
-                item
-            )
+            _make_json_serializable(item)
             for item in value
         ]
 
     return value
+
+
+def _extract_response_message(
+    response: Any,
+) -> str:
+
+    if response is None:
+        return ""
+
+    if isinstance(response, str):
+        return response.strip()
+
+    if isinstance(response, dict):
+
+        # Normal final_response format
+        message = response.get("message")
+
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+
+        # Other possible response keys
+        for key in (
+            "summary",
+            "answer",
+            "response",
+            "text",
+        ):
+
+            value = response.get(key)
+
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        # Nested result
+        if "result" in response:
+            return _extract_response_message(
+                response["result"]
+            )
+
+        # Nested data
+        if "data" in response:
+            return _extract_response_message(
+                response["data"]
+            )
+
+    if isinstance(response, list):
+
+        messages = []
+
+        for item in response:
+
+            message = _extract_response_message(
+                item
+            )
+
+            if message:
+                messages.append(message)
+
+        return "\n".join(messages).strip()
+
+    return str(response).strip()
 
 
 def save_conversation(
@@ -126,6 +181,31 @@ def save_conversation(
             connection.close()
 
 
+def _build_conversation_response(
+    response_json: Any,
+) -> dict[str, Any]:
+
+    if not isinstance(
+        response_json,
+        dict,
+    ):
+        return {
+            "message": _extract_response_message(
+                response_json
+            ),
+            "data": response_json,
+        }
+
+    return {
+        "message": _extract_response_message(
+            response_json
+        ),
+        "data": response_json.get(
+            "data"
+        ),
+    }
+
+
 def get_conversations(
     employee_id: str,
 ) -> list[dict[str, Any]]:
@@ -148,7 +228,6 @@ def get_conversations(
                 query_type,
                 status,
                 response_json,
-                raw_result_json,
                 created_at,
                 completed_at
             FROM public.conversations
@@ -166,16 +245,20 @@ def get_conversations(
 
         for row in rows:
 
+            response_json = row[5]
+
             conversation = {
                 "id": str(row[0]),
                 "employee_id": row[1],
                 "query": row[2],
                 "query_type": row[3],
                 "status": row[4],
-                "response_json": row[5],
-                "raw_result_json": row[6],
-                "created_at": row[7],
-                "completed_at": row[8],
+                "response": _build_conversation_response(
+                    response_json
+                ),
+                "response_json": response_json,
+                "created_at": row[6],
+                "completed_at": row[7],
             }
 
             conversations.append(
@@ -237,14 +320,26 @@ def get_conversation(
         if row is None:
             return None
 
+        response_json = row[5]
+
         conversation = {
             "id": str(row[0]),
             "employee_id": row[1],
             "query": row[2],
             "query_type": row[3],
             "status": row[4],
-            "response_json": row[5],
+
+            # Human-readable response
+            "response": _build_conversation_response(
+                response_json
+            ),
+
+            # Full structured AI response
+            "response_json": response_json,
+
+            # Internal/raw graph result
             "raw_result_json": row[6],
+
             "created_at": row[7],
             "completed_at": row[8],
         }
@@ -305,20 +400,18 @@ def get_conversation(
         # Timeline
         # -----------------------------------------------------
 
-        conversation[
-            "timeline"
-        ] = build_conversation_timeline(
-            conversation,
-            hitl_request=hitl_request,
+        conversation["timeline"] = (
+            build_conversation_timeline(
+                conversation,
+                hitl_request=hitl_request,
+            )
         )
 
         # -----------------------------------------------------
-        # Expose HITL information
+        # HITL information
         # -----------------------------------------------------
 
-        conversation[
-            "hitl_request"
-        ] = hitl_request
+        conversation["hitl_request"] = hitl_request
 
         return _make_json_serializable(
             conversation

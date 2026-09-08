@@ -6,10 +6,9 @@ from typing import Any
 
 LOG_FILE = (
     Path(__file__).resolve().parent.parent
-    / "data"
+    / "logs"
     / "chat_logs.jsonl"
 )
-
 
 def _make_json_serializable(
     value: Any,

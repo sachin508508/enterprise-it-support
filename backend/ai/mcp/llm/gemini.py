@@ -9,7 +9,7 @@ from google.genai import types
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from ..rag.retriever import get_instructions_for_llm
+from backend.ai.rag.mcp.retriever import get_instructions_for_llm
 
 
 # ============================================================

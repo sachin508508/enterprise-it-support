@@ -8,7 +8,7 @@ from ..auth.dependencies import (
     get_current_employee,
 )
 
-from ..conversation_repository import (
+from ..repositories.conversation import (
     get_conversation,
     get_conversations,
 )

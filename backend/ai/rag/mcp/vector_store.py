@@ -9,7 +9,8 @@ BASE_DIR = Path(__file__).resolve().parents[4]
 CHROMA_DB_PATH = (
     BASE_DIR
     / "data"
-    / "chroma_db"
+    / "chroma"
+    / "mcp"
 )
 
 COLLECTION_NAME = "mcp_instructions"

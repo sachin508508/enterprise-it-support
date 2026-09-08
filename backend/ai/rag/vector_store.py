@@ -10,7 +10,10 @@ from .embeddings import create_embeddings
 BASE_DIR = Path(__file__).resolve().parent
 
 CHROMA_PATH = (
-    BASE_DIR / "chroma_db"
+    BASE_DIR.parent.parent.parent
+    / "data"
+    / "chroma"
+    / "company"
 )
 
 COLLECTION_NAME = "company_documents"

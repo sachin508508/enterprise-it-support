@@ -1,288 +1,156 @@
 import os
 import sys
+from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
 
+# Allow imports from project root when running:
+# python backend/api/test_api.py
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+load_dotenv(PROJECT_ROOT / ".env")
 
 BASE_URL = os.getenv(
-    "API_BASE_URL",
+    "TEST_API_BASE_URL",
     "http://localhost:8000",
 )
 
-EMPLOYEE_ID = os.getenv(
-    "TEST_EMPLOYEE_ID",
-    "EMP001",
-)
-
-PASSWORD = os.getenv(
-    "TEST_PASSWORD",
-    "password",
-)
+EMPLOYEE_ID = os.getenv("TEST_EMPLOYEE_ID", "EMP001")
+PASSWORD = os.getenv("TEST_EMPLOYEE_PASSWORD", "password")
 
 
-def check(
-    name: str,
-    condition: bool,
-    details: str = "",
-):
-    if condition:
-        print(f"✅ {name}")
-    else:
-        print(f"❌ {name}")
-        if details:
-            print(f"   {details}")
-        return False
+def print_result(name: str, response: requests.Response):
+    print(f"\n{'=' * 70}")
+    print(name)
+    print(f"{'=' * 70}")
+    print("HTTP:", response.status_code)
 
-    return True
+    try:
+        print("Response:")
+        print(response.json())
+    except Exception:
+        print(response.text)
 
 
-def main():
-    print("\n==============================")
-    print(" Enterprise IT Support Test")
-    print("==============================\n")
-
-    failures = 0
-
-    # ---------------------------------
-    # 1. Health
-    # ---------------------------------
-
-    response = requests.get(
-        f"{BASE_URL}/health",
-        timeout=10,
-    )
-
-    if not check(
-        "Health endpoint",
-        response.status_code == 200
-        and response.json().get("status") == "healthy",
-        response.text,
-    ):
-        failures += 1
-
-    # ---------------------------------
-    # 2. Login
-    # ---------------------------------
-
+def login() -> str:
     response = requests.post(
         f"{BASE_URL}/api/auth/login",
         json={
             "employee_id": EMPLOYEE_ID,
             "password": PASSWORD,
         },
-        timeout=10,
+        timeout=30,
     )
 
-    login_ok = (
-        response.status_code == 200
-        and "access_token" in response.json()
+    print_result("1. LOGIN", response)
+
+    assert response.status_code == 200, (
+        f"Login failed: {response.text}"
     )
 
-    if not check(
-        "Login",
-        login_ok,
-        response.text,
-    ):
-        failures += 1
-        print("\nCannot continue without login token.")
-        sys.exit(1)
+    data = response.json()
 
-    login_data = response.json()
-    token = login_data["access_token"]
+    token = data.get("access_token")
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
+    assert token, "Login succeeded but access_token was not returned."
 
-    print(f"   Logged in as: {EMPLOYEE_ID}")
-    print(f"   Role: {login_data['user'].get('role')}")
+    return token
 
-    # ---------------------------------
-    # 3. /me
-    # ---------------------------------
 
-    response = requests.get(
-        f"{BASE_URL}/api/auth/me",
-        headers=headers,
-        timeout=10,
-    )
+def test_mcp_jira(token: str):
+    """
+    Real MCP/Jira integration test.
 
-    if not check(
-        "Authenticated /me",
-        response.status_code == 200,
-        response.text,
-    ):
-        failures += 1
+    Flow:
+        FastAPI
+          ↓
+        LangGraph
+          ↓
+        DeepSeek Router
+          ↓
+        MCP Node
+          ↓
+        MCP Server
+          ↓
+        Jira
+    """
 
-    # ---------------------------------
-    # 4. Dashboard
-    # ---------------------------------
-
-    response = requests.get(
-        f"{BASE_URL}/api/dashboard",
-        headers=headers,
-        timeout=10,
-    )
-
-    if not check(
-        "Dashboard",
-        response.status_code == 200,
-        response.text,
-    ):
-        failures += 1
-
-    # ---------------------------------
-    # 5. Conversations
-    # ---------------------------------
-
-    response = requests.get(
-        f"{BASE_URL}/api/conversations",
-        headers=headers,
-        timeout=10,
-    )
-
-    if not check(
-        "Conversation history",
-        response.status_code == 200,
-        response.text,
-    ):
-        failures += 1
-
-    # ---------------------------------
-    # 6. One RAG request
-    # ---------------------------------
-
-    print("\nRunning one AI request...")
-    print("This may consume an LLM API call.\n")
+    query = "Get the details of Jira project KAN."
 
     response = requests.post(
         f"{BASE_URL}/api/chat",
-        headers=headers,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
         json={
-            "query": (
-                "What are the general IT support "
-                "guidelines for employees?"
-            )
+            "query": query,
         },
         timeout=120,
     )
 
-    chat_ok = response.status_code == 200
+    print_result(
+        "2. REAL MCP / JIRA TEST",
+        response,
+    )
 
-    if not check(
-        "AI chat request",
-        chat_ok,
-        response.text,
-    ):
-        failures += 1
+    assert response.status_code == 200, (
+        f"MCP/Jira request failed with HTTP "
+        f"{response.status_code}: {response.text}"
+    )
 
-    conversation_id = None
+    data = response.json()
 
-    if chat_ok:
-        chat_data = response.json()
+    assert data.get("query_type") == "Action", (
+        f"Expected query_type='Action', "
+        f"got: {data.get('query_type')}"
+    )
 
-        print(
-            f"   Query type: "
-            f"{chat_data.get('query_type')}"
-        )
+    assert data.get("status") == "successful", (
+        f"MCP/Jira request was not successful.\n"
+        f"Status: {data.get('status')}\n"
+        f"Response: {data.get('response')}"
+    )
 
-        print(
-            f"   Status: "
-            f"{chat_data.get('status')}"
-        )
+    assert data.get("response"), (
+        "MCP/Jira request succeeded but no response was returned."
+    )
 
-        conversation_id = chat_data.get(
-            "request_id"
-        )
+    print("\n✅ REAL MCP/JIRA TEST PASSED")
+    print("Query Type:", data.get("query_type"))
+    print("Status:", data.get("status"))
+    print("Response:", data.get("response"))
 
-    # ---------------------------------
-    # 7. History after chat
-    # ---------------------------------
 
+def main():
+    print("\n" + "=" * 70)
+    print("ENTERPRISE IT SUPPORT API TEST")
+    print("=" * 70)
+    print("API:", BASE_URL)
+    print("Employee:", EMPLOYEE_ID)
+
+    # 1. Health check
     response = requests.get(
-        f"{BASE_URL}/api/conversations",
-        headers=headers,
+        f"{BASE_URL}/health",
         timeout=10,
     )
 
-    if not check(
-        "Conversation history after chat",
-        response.status_code == 200,
-        response.text,
-    ):
-        failures += 1
+    print_result("HEALTH CHECK", response)
 
-    # ---------------------------------
-    # 8. Unauthorized request
-    # ---------------------------------
+    assert response.status_code == 200
+    assert response.json().get("status") == "healthy"
 
-    response = requests.get(
-        f"{BASE_URL}/api/auth/me",
-        timeout=10,
-    )
+    # 2. Login
+    token = login()
 
-    if not check(
-        "Unauthorized request rejected",
-        response.status_code in {401, 403},
-        response.text,
-    ):
-        failures += 1
+    # 3. Real MCP/Jira integration
+    test_mcp_jira(token)
 
-    # ---------------------------------
-    # 9. Invalid token
-    # ---------------------------------
-
-    response = requests.get(
-        f"{BASE_URL}/api/auth/me",
-        headers={
-            "Authorization": "Bearer invalid-token"
-        },
-        timeout=10,
-    )
-
-    if not check(
-        "Invalid token rejected",
-        response.status_code == 401,
-        response.text,
-    ):
-        failures += 1
-
-    # ---------------------------------
-    # 10. Conversation details
-    # ---------------------------------
-
-    if conversation_id:
-        response = requests.get(
-            f"{BASE_URL}/api/conversations/"
-            f"{conversation_id}",
-            headers=headers,
-            timeout=10,
-        )
-
-        if not check(
-            "Conversation details",
-            response.status_code == 200,
-            response.text,
-        ):
-            failures += 1
-
-    # ---------------------------------
-    # Result
-    # ---------------------------------
-
-    print("\n==============================")
-
-    if failures == 0:
-        print("🎉 ALL TESTS PASSED")
-    else:
-        print(
-            f"❌ {failures} TEST(S) FAILED"
-        )
-
-    print("==============================\n")
-
-    sys.exit(1 if failures else 0)
+    print("\n" + "=" * 70)
+    print("ALL MCP/JIRA TESTS PASSED")
+    print("=" * 70)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ import sys
 
 from .security import hash_password
 
-from ...ai.tool_call.db.connection import (
+from ...core.database.connection import (
     get_db_connection,
 )
 
