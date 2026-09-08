@@ -1,60 +1,34 @@
-import * as SecureStore from 'expo-secure-store';
-
 import { APP_CONFIG } from '../constants/config';
 
-const API_BASE_URL = APP_CONFIG.API_BASE_URL;
+export const API_BASE_URL = APP_CONFIG.API_BASE_URL;
 
-const TOKEN_KEY = 'auth_token';
-
-interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  body?: unknown;
+interface RequestOptions extends RequestInit {
   token?: string;
 }
 
 export async function apiRequest<T>(
   endpoint: string,
-  options: RequestOptions = {}
+  options: RequestOptions = {},
 ): Promise<T> {
-  const {
-    method = 'GET',
-    body,
-    token,
-  } = options;
+  const { token, headers, ...requestOptions } = options;
 
-  const authToken =
-    token ??
-    (await SecureStore.getItemAsync(TOKEN_KEY));
+  const response = await fetch(
+    `${API_BASE_URL}${endpoint}`,
+    {
+      ...requestOptions,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token
+          ? {
+              Authorization: `Bearer ${token}`,
+            }
+          : {}),
+        ...headers,
+      },
+    },
+  );
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-
-  if (authToken) {
-    headers.Authorization = `Bearer ${authToken}`;
-  }
-
-  let response: Response;
-
-  try {
-    response = await fetch(
-      `${API_BASE_URL}${endpoint}`,
-      {
-        method,
-        headers,
-        body:
-          body !== undefined
-            ? JSON.stringify(body)
-            : undefined,
-      }
-    );
-  } catch {
-    throw new Error(
-      'Unable to connect to the IT Support server.'
-    );
-  }
-
-  let data: unknown = null;
+  let data: unknown;
 
   try {
     data = await response.json();
@@ -63,31 +37,15 @@ export async function apiRequest<T>(
   }
 
   if (!response.ok) {
-    let message = `Request failed with status ${response.status}`;
-
-    if (
+    const errorMessage =
       typeof data === 'object' &&
       data !== null &&
-      'detail' in data
-    ) {
-      const detail = (
-        data as { detail: unknown }
-      ).detail;
+      'detail' in data &&
+      typeof data.detail === 'string'
+        ? data.detail
+        : 'Something went wrong. Please try again.';
 
-      if (typeof detail === 'string') {
-        message = detail;
-      } else if (
-        typeof detail === 'object' &&
-        detail !== null &&
-        'message' in detail
-      ) {
-        message = String(
-          (detail as { message: unknown }).message
-        );
-      }
-    }
-
-    throw new Error(message);
+    throw new Error(errorMessage);
   }
 
   return data as T;

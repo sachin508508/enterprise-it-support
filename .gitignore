@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+chroma_db/
+**/chroma_db/
+
+data/chroma/
+data/.DS_Store
