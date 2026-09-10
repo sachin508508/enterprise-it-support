@@ -1,6 +1,11 @@
+import * as SecureStore from 'expo-secure-store';
+
 import { APP_CONFIG } from '../constants/config';
 
-export const API_BASE_URL = APP_CONFIG.API_BASE_URL;
+export const API_BASE_URL =
+  APP_CONFIG.API_BASE_URL;
+
+const TOKEN_KEY = 'auth_token';
 
 interface RequestOptions extends RequestInit {
   token?: string;
@@ -10,19 +15,37 @@ export async function apiRequest<T>(
   endpoint: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { token, headers, ...requestOptions } = options;
+
+  const {
+    token,
+    headers,
+    ...requestOptions
+  } = options;
+
+  // Use explicitly supplied token first.
+  // Otherwise automatically load the saved token.
+  const authToken =
+    token ??
+    await SecureStore.getItemAsync(
+      TOKEN_KEY
+    );
 
   const response = await fetch(
     `${API_BASE_URL}${endpoint}`,
     {
       ...requestOptions,
+
       headers: {
-        'Content-Type': 'application/json',
-        ...(token
+        'Content-Type':
+          'application/json',
+
+        ...(authToken
           ? {
-              Authorization: `Bearer ${token}`,
+              Authorization:
+                `Bearer ${authToken}`,
             }
           : {}),
+
         ...headers,
       },
     },
@@ -37,6 +60,7 @@ export async function apiRequest<T>(
   }
 
   if (!response.ok) {
+
     const errorMessage =
       typeof data === 'object' &&
       data !== null &&

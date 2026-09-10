@@ -8,7 +8,9 @@ from mcp.client.stdio import stdio_client
 from langchain_deepseek import ChatDeepSeek
 
 from .state import GraphState
-from .response_formatter import build_final_response
+from .response_formatter import (
+    build_final_response,
+)
 
 from ..rag.deepseek import (
     ask_question,
@@ -17,6 +19,7 @@ from ..rag.deepseek import (
 
 from ..tool_call.runner import (
     run_tool_call,
+    generate_tool_response,
 )
 
 from ..tool_call.access_control import (
@@ -132,9 +135,13 @@ def _mcp_result_to_dict(
         result,
         "model_dump",
     ):
+
         data = result.model_dump()
 
-        if isinstance(data, dict):
+        if isinstance(
+            data,
+            dict,
+        ):
             return data
 
     if isinstance(
@@ -152,7 +159,6 @@ def _mcp_result_is_error(
     result,
 ) -> bool:
 
-    # MCP CallToolResult normally exposes isError.
     if getattr(
         result,
         "isError",
@@ -160,7 +166,6 @@ def _mcp_result_is_error(
     ):
         return True
 
-    # Handle model_dump() output.
     if hasattr(
         result,
         "model_dump",
@@ -185,7 +190,6 @@ def _mcp_result_is_error(
             }:
                 return True
 
-    # Handle dictionaries.
     if isinstance(
         result,
         dict,
@@ -223,7 +227,7 @@ async def mcp_node(
     try:
 
         # ----------------------------------------------------
-        # 1. Validate authenticated employee
+        # 1. Validate employee
         # ----------------------------------------------------
 
         if not employee_id:
@@ -247,7 +251,7 @@ async def mcp_node(
         )
 
         # ----------------------------------------------------
-        # 2. Get requester role
+        # 2. Get employee role
         # ----------------------------------------------------
 
         role = get_employee_role(
@@ -287,7 +291,7 @@ async def mcp_node(
             }
 
         # ----------------------------------------------------
-        # 4. Start MCP server
+        # 4. MCP environment
         # ----------------------------------------------------
 
         mcp_env = os.environ.copy()
@@ -323,6 +327,10 @@ async def mcp_node(
             env=mcp_env,
         )
 
+        # ----------------------------------------------------
+        # 5. Start MCP server
+        # ----------------------------------------------------
+
         async with stdio_client(
             server_params
         ) as (
@@ -335,10 +343,6 @@ async def mcp_node(
                 write,
             ) as session:
 
-                # ------------------------------------------------
-                # 5. Initialize MCP
-                # ------------------------------------------------
-
                 await session.initialize()
 
                 # ------------------------------------------------
@@ -349,9 +353,7 @@ async def mcp_node(
                     await session.list_tools()
                 )
 
-                tools = (
-                    tools_result.tools
-                )
+                tools = tools_result.tools
 
                 if not tools:
 
@@ -361,7 +363,7 @@ async def mcp_node(
                     )
 
                 # ------------------------------------------------
-                # 7. Build tool descriptions
+                # 7. Tool descriptions
                 # ------------------------------------------------
 
                 tool_descriptions = []
@@ -382,7 +384,7 @@ async def mcp_node(
                     )
 
                 # ------------------------------------------------
-                # 8. DeepSeek selects MCP tool
+                # 8. DeepSeek tool selection
                 # ------------------------------------------------
 
                 api_key = os.getenv(
@@ -485,7 +487,7 @@ Rules:
                     )
 
                 # ------------------------------------------------
-                # 9. Parse DeepSeek decision
+                # 9. Parse decision
                 # ------------------------------------------------
 
                 try:
@@ -526,7 +528,7 @@ Rules:
                     )
 
                 # ------------------------------------------------
-                # 10. Validate selected tool
+                # 10. Validate tool
                 # ------------------------------------------------
 
                 available_tool_names = {
@@ -558,7 +560,7 @@ Rules:
                 )
 
                 # ------------------------------------------------
-                # 12. Detect actual MCP failure
+                # 12. Detect failure
                 # ------------------------------------------------
 
                 if _mcp_result_is_error(
@@ -579,7 +581,7 @@ Rules:
                     }
 
                 # ------------------------------------------------
-                # 13. Successful MCP execution
+                # 13. Successful result
                 # ------------------------------------------------
 
                 return {
@@ -656,9 +658,30 @@ def final_response_node(
             "message": "Unknown route.",
         }
 
+    # --------------------------------------------------------
+    # DB / MCP response LLM
+    # --------------------------------------------------------
+
+    response_message = None
+
+    if route in {
+        "db",
+        "mcp",
+    }:
+
+        response_message = generate_tool_response(
+            question=state["user_query"],
+            tool_results=result,
+        )
+
+    # --------------------------------------------------------
+    # Build normalized response
+    # --------------------------------------------------------
+
     final_response = build_final_response(
         route=route,
         result=result,
+        message_override=response_message,
     )
 
     return {

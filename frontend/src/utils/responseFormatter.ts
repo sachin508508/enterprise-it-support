@@ -564,17 +564,19 @@ export function formatAIResponse(
      *   data: {...}
      * }
      */
-    const innerData =
-      data.data;
+    const message =
+      cleanString(data.message);
 
-    if (
-      typeof innerData === 'object' &&
-      innerData !== null
-    ) {
-      return formatAIResponse(
-        innerData,
-        queryType
-      );
+    if (message) {
+      return {
+        title:
+          queryType === 'Action'
+            ? 'Action Result'
+            : queryType === 'System Information'
+              ? 'System Information'
+              : 'AI Response',
+        message,
+      };
     }
 
     /*

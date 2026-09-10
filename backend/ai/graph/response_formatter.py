@@ -1,24 +1,22 @@
+import json
+import re
 from typing import Any
 
 
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 IGNORED_KEYS = {
-    "status",
-    "route",
-    "type",
-    "sources",
-    "needs_action",
     "tool",
     "arguments",
+    "target_employee_id",
     "error_type",
-    "meta",
-    "annotations",
-    "structured_content",
-    "result_type",
-    "self",
-    "avatarUrls",
-    "iconUrl",
+    "isError",
+    "is_error",
+    "status",
+    "type",
 }
-
 
 PREFERRED_TEXT_KEYS = (
     "summary",
@@ -29,45 +27,78 @@ PREFERRED_TEXT_KEYS = (
 )
 
 
-def _humanize_key(key: str) -> str:
-    return key.replace("_", " ").strip().capitalize()
+# ============================================================
+# HELPERS
+# ============================================================
+
+def _humanize_key(
+    key: str,
+) -> str:
+
+    key = key.replace(
+        "_",
+        " ",
+    )
+
+    key = re.sub(
+        r"(?<!^)(?=[A-Z])",
+        " ",
+        key,
+    )
+
+    return key.strip().capitalize()
 
 
-def _format_value(value: Any) -> str:
+def _format_value(
+    value: Any,
+) -> str:
+
     if value is None:
-        return ""
+        return "Not available."
 
-    if isinstance(value, str):
-        return value.strip()
+    if isinstance(
+        value,
+        bool,
+    ):
+        return "Yes" if value else "No"
 
-    if isinstance(value, (int, float, bool)):
+    if isinstance(
+        value,
+        (str, int, float),
+    ):
         return str(value)
 
-    if isinstance(value, list):
-        parts = []
+    if isinstance(
+        value,
+        list,
+    ):
 
-        for item in value:
-            formatted = _format_value(item)
+        if not value:
+            return "None."
 
-            if formatted:
-                parts.append(formatted)
+        return "\n".join(
+            f"• {_format_value(item)}"
+            for item in value
+        )
 
-        return "\n".join(parts)
+    if isinstance(
+        value,
+        dict,
+    ):
 
-    if isinstance(value, dict):
         parts = []
 
         for key, item in value.items():
+
             if key in IGNORED_KEYS:
                 continue
 
-            formatted = _format_value(item)
-
-            if not formatted:
+            if item is None:
                 continue
 
             parts.append(
-                f"{_humanize_key(key)}: {formatted}"
+                f"{_humanize_key(key)}: "
+                f"{_format_value(item)}"
             )
 
         return "\n".join(parts)
@@ -75,303 +106,453 @@ def _format_value(value: Any) -> str:
     return str(value)
 
 
-def _extract_mcp_text(result: Any) -> str:
-    """
-    Extract the actual text returned by an MCP tool.
+def _try_parse_json(
+    value: Any,
+) -> Any:
 
-    Typical MCP structure:
+    if not isinstance(
+        value,
+        str,
+    ):
+        return value
 
-    {
-        "status": "success",
-        "tool": "...",
-        "result": {
-            "content": [
-                {
-                    "type": "text",
-                    "text": "{ ... Jira JSON ... }"
-                }
-            ]
-        }
-    }
-    """
+    value = value.strip()
 
-    if not isinstance(result, dict):
-        return ""
-
-    mcp_result = result.get("result")
-
-    if not isinstance(mcp_result, dict):
-        return ""
-
-    content = mcp_result.get("content")
-
-    if not isinstance(content, list):
-        return ""
-
-    for item in content:
-        if not isinstance(item, dict):
-            continue
-
-        if item.get("type") != "text":
-            continue
-
-        text = item.get("text")
-
-        if isinstance(text, str) and text.strip():
-            return text.strip()
-
-    return ""
-
-
-def _format_jira_project(data: dict) -> str:
-    """
-    Convert Jira project JSON into a concise human-readable response.
-    """
-
-    key = data.get("key")
-    name = data.get("name")
-    project_id = data.get("id")
-    project_type = data.get("projectTypeKey")
-    simplified = data.get("simplified")
-    is_private = data.get("isPrivate")
-
-    lead = data.get("lead")
-
-    lead_name = None
-
-    if isinstance(lead, dict):
-        lead_name = lead.get("displayName")
-
-    lines = []
-
-    if key:
-        lines.append(f"Jira project: {key}")
-
-    if name:
-        lines.append(f"Name: {name}")
-
-    if project_id:
-        lines.append(f"Project ID: {project_id}")
-
-    if project_type:
-        lines.append(
-            f"Project type: {_humanize_key(project_type)}"
-        )
-
-    if lead_name:
-        lines.append(f"Project lead: {lead_name}")
-
-    if simplified is not None:
-        lines.append(
-            f"Project style: "
-            f"{'Next-gen' if simplified else 'Classic'}"
-        )
-
-    if is_private is not None:
-        lines.append(
-            f"Visibility: "
-            f"{'Private' if is_private else 'Public'}"
-        )
-
-    issue_types = data.get("issueTypes")
-
-    if isinstance(issue_types, list):
-        issue_names = []
-
-        for issue_type in issue_types:
-            if not isinstance(issue_type, dict):
-                continue
-
-            issue_name = issue_type.get("name")
-
-            if issue_name:
-                issue_names.append(issue_name)
-
-        if issue_names:
-            lines.append(
-                "Issue types: " + ", ".join(issue_names)
-            )
-
-    return "\n".join(lines)
-
-
-def _try_parse_json(text: str) -> Any:
-    import json
+    if not value:
+        return value
 
     try:
-        return json.loads(text)
-    except (json.JSONDecodeError, TypeError):
+        return json.loads(value)
+    except Exception:
+        return value
+
+
+# ============================================================
+# MCP TEXT EXTRACTION
+# ============================================================
+
+def _extract_mcp_text(
+    data: Any,
+) -> str | None:
+
+    if data is None:
         return None
 
+    if isinstance(
+        data,
+        str,
+    ):
+        return data.strip()
 
-def extract_human_response(result: Any) -> str:
-    if result is None:
-        return ""
+    if isinstance(
+        data,
+        list,
+    ):
 
-    if isinstance(result, str):
-        return result.strip()
+        for item in data:
 
-    if isinstance(result, list):
-        text_parts = []
-
-        for item in result:
-            text = extract_human_response(item)
-
-            if text:
-                text_parts.append(text)
-
-        return "\n".join(text_parts).strip()
-
-    if isinstance(result, dict):
-
-        # ---------------------------------------------------------
-        # MCP Jira result
-        # ---------------------------------------------------------
-        mcp_text = _extract_mcp_text(result)
-
-        if mcp_text:
-            parsed = _try_parse_json(mcp_text)
-
-            if isinstance(parsed, dict):
-
-                # Jira project information
-                if (
-                    parsed.get("key")
-                    and parsed.get("name")
-                    and parsed.get("projectTypeKey")
-                ):
-                    return _format_jira_project(parsed)
-
-                # Generic JSON result
-                return _format_value(parsed)
-
-            return mcp_text
-
-        # ---------------------------------------------------------
-        # Normal preferred response fields
-        # ---------------------------------------------------------
-        for key in PREFERRED_TEXT_KEYS:
-
-            if key not in result:
-                continue
-
-            value = result[key]
-
-            text = extract_human_response(value)
-
-            if text:
-                return text
-
-        # ---------------------------------------------------------
-        # Nested content
-        # ---------------------------------------------------------
-        if "content" in result:
-            text = extract_human_response(
-                result["content"]
+            text = _extract_mcp_text(
+                item
             )
 
             if text:
                 return text
 
-        # ---------------------------------------------------------
-        # Generic dictionary
-        # ---------------------------------------------------------
-        text = _format_value(result)
+        return None
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+        return None
+
+    # Direct text fields
+    for key in PREFERRED_TEXT_KEYS:
+
+        value = data.get(
+            key
+        )
+
+        if isinstance(
+            value,
+            str,
+        ) and value.strip():
+
+            return value.strip()
+
+    # Nested result
+    if "result" in data:
+
+        text = _extract_mcp_text(
+            data["result"]
+        )
 
         if text:
             return text
 
-        return ""
+    # Nested data
+    if "data" in data:
 
-    return str(result).strip()
+        text = _extract_mcp_text(
+            data["data"]
+        )
+
+        if text:
+            return text
+
+    return None
 
 
-def get_result_status(result: Any) -> str:
-    if isinstance(result, dict):
+# ============================================================
+# JIRA PROJECT FORMATTER
+# ============================================================
 
-        status = result.get("status")
+def _format_jira_project(
+    data: dict,
+) -> str | None:
 
-        if status in {
-            "failed",
-            "error",
-            "denied",
-            "pending",
-            "success",
-            "successful",
-        }:
-            if status == "error":
-                return "failed"
+    if not isinstance(
+        data,
+        dict,
+    ):
+        return None
 
-            if status == "success":
-                return "successful"
+    project_keys = {
+        "id",
+        "key",
+        "name",
+        "description",
+        "lead",
+        "project_type_key",
+        "projectTypeKey",
+    }
 
-            return status
+    if not any(
+        key in data
+        for key in project_keys
+    ):
+        return None
 
-        if "data" in result:
-            return get_result_status(
-                result["data"]
+    parts = []
+
+    if data.get("name"):
+        parts.append(
+            f"Project: {data['name']}"
+        )
+
+    if data.get("key"):
+        parts.append(
+            f"Key: {data['key']}"
+        )
+
+    if data.get("id"):
+        parts.append(
+            f"Project ID: {data['id']}"
+        )
+
+    if data.get("description"):
+        parts.append(
+            f"Description: {data['description']}"
+        )
+
+    if data.get("project_type_key"):
+        parts.append(
+            f"Project type: "
+            f"{data['project_type_key']}"
+        )
+
+    if data.get("projectTypeKey"):
+        parts.append(
+            f"Project type: "
+            f"{data['projectTypeKey']}"
+        )
+
+    if data.get("lead"):
+
+        lead = data["lead"]
+
+        if isinstance(
+            lead,
+            dict,
+        ):
+
+            lead_name = (
+                lead.get("displayName")
+                or lead.get("display_name")
+                or lead.get("name")
             )
 
-        if "result" in result:
-            return get_result_status(
-                result["result"]
+            if lead_name:
+                parts.append(
+                    f"Lead: {lead_name}"
+                )
+
+        else:
+
+            parts.append(
+                f"Lead: {lead}"
             )
 
-    return "successful"
+    return "\n".join(parts) if parts else None
 
+
+# ============================================================
+# HUMAN RESPONSE EXTRACTION
+# ============================================================
+
+def extract_human_response(
+    result: Any,
+) -> str:
+
+    result = _try_parse_json(
+        result
+    )
+
+    # --------------------------------------------------------
+    # String
+    # --------------------------------------------------------
+
+    if isinstance(
+        result,
+        str,
+    ):
+
+        return result.strip()
+
+    # --------------------------------------------------------
+    # List
+    # --------------------------------------------------------
+
+    if isinstance(
+        result,
+        list,
+    ):
+
+        responses = []
+
+        for item in result:
+
+            text = extract_human_response(
+                item
+            )
+
+            if text:
+                responses.append(
+                    text
+                )
+
+        if responses:
+
+            return "\n\n".join(
+                responses
+            )
+
+        return "The request was processed, but no additional information was returned."
+
+    # --------------------------------------------------------
+    # Non-dict
+    # --------------------------------------------------------
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+
+        return str(result)
+
+    # --------------------------------------------------------
+    # Preferred response fields
+    # --------------------------------------------------------
+
+    for key in PREFERRED_TEXT_KEYS:
+
+        value = result.get(
+            key
+        )
+
+        if isinstance(
+            value,
+            str,
+        ) and value.strip():
+
+            return value.strip()
+
+    # --------------------------------------------------------
+    # MCP nested result
+    # --------------------------------------------------------
+
+    if "result" in result:
+
+        nested = result["result"]
+
+        text = _extract_mcp_text(
+            nested
+        )
+
+        if text:
+            return text
+
+        if isinstance(
+            nested,
+            dict,
+        ):
+
+            jira_text = _format_jira_project(
+                nested
+            )
+
+            if jira_text:
+                return jira_text
+
+    # --------------------------------------------------------
+    # Nested data
+    # --------------------------------------------------------
+
+    if "data" in result:
+
+        text = _extract_mcp_text(
+            result["data"]
+        )
+
+        if text:
+            return text
+
+    # --------------------------------------------------------
+    # Jira project
+    # --------------------------------------------------------
+
+    jira_text = _format_jira_project(
+        result
+    )
+
+    if jira_text:
+        return jira_text
+
+    # --------------------------------------------------------
+    # Generic fallback
+    # --------------------------------------------------------
+
+    return _format_value(
+        result
+    )
+
+
+# ============================================================
+# STATUS
+# ============================================================
+
+def get_result_status(
+    result: Any,
+) -> str:
+
+    if isinstance(
+        result,
+        list,
+    ):
+
+        for item in result:
+
+            status = get_result_status(
+                item
+            )
+
+            if status in {
+                "error",
+                "failed",
+                "denied",
+                "pending",
+            }:
+                return status
+
+        return "success"
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+        return "success"
+
+    status = result.get(
+        "status"
+    )
+
+    if status in {
+        "error",
+        "failed",
+        "denied",
+        "pending",
+        "success",
+        "successful",
+    }:
+        return status
+
+    nested = result.get(
+        "result"
+    )
+
+    if nested is not None:
+
+        nested_status = get_result_status(
+            nested
+        )
+
+        if nested_status != "success":
+            return nested_status
+
+    return "success"
+
+
+# ============================================================
+# FINAL RESPONSE
+# ============================================================
 
 def build_final_response(
     route: str | None,
     result: Any,
+    message_override: str | None = None,
 ) -> dict:
 
-    status = get_result_status(result)
-
-    if status == "error":
-        status = "failed"
-
-    message = extract_human_response(result)
-
-    if not message:
-
-        if status == "failed":
-            message = (
-                "The AI could not complete your request."
-            )
-
-        elif status == "denied":
-            message = "Your request was denied."
-
-        elif status == "pending":
-            message = (
-                "Your request is pending review."
-            )
-
-        else:
-            message = "Your request was processed."
-
-    query_type_map = {
+    route_query_types = {
         "rag": "RAG",
         "db": "System Information",
         "mcp": "Action",
     }
 
+    status = get_result_status(
+        result
+    )
+
+    if status == "success":
+        normalized_status = "successful"
+    elif status == "error":
+        normalized_status = "failed"
+    else:
+        normalized_status = status
+
+    # --------------------------------------------------------
+    # Use response LLM when available.
+    # Otherwise deterministic formatter.
+    # --------------------------------------------------------
+
+    message = (
+        message_override.strip()
+        if isinstance(
+            message_override,
+            str,
+        )
+        and message_override.strip()
+        else extract_human_response(
+            result
+        )
+    )
+
     return {
-        "status": status,
+        "status": normalized_status,
         "route": route,
-        "query_type": query_type_map.get(
+        "query_type": route_query_types.get(
             route,
             "Other",
         ),
         "message": message,
-
-        # Keep complete backend data for:
-        # - audit
-        # - debugging
-        # - HITL
-        # - future UI timelines
-        #
-        # This data should NOT be directly displayed
-        # as the user-facing message.
         "data": result,
     }

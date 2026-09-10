@@ -2,7 +2,6 @@ import json
 
 from .llm.deepseek import get_deepseek_client
 from .llm.tool_definitions import TOOL_DEFINITIONS
-
 from .authorization import authorize_tool_call
 
 from .tools.get_employee import get_employee_details
@@ -23,6 +22,10 @@ TOOL_FUNCTIONS = {
 }
 
 
+# ============================================================
+# DATABASE TOOL CALL
+# ============================================================
+
 def run_tool_call(
     question: str,
     employee_id: str,
@@ -30,7 +33,6 @@ def run_tool_call(
     hitl_id: str | None = None,
     approved_by: str | None = None,
 ):
-
     if not employee_id:
         raise ValueError(
             "Authenticated employee ID is required."
@@ -45,11 +47,12 @@ def run_tool_call(
                 "role": "system",
                 "content": (
                     "You are an enterprise IT support assistant. "
-                    "Select the appropriate database tool for the user's request. "
-                    "If the user says 'my', 'me', or 'myself', "
+                    "Select the appropriate database tool for the "
+                    "user's request. "
+                    f"If the user says 'my', 'me', or 'myself', "
                     f"use employee ID '{employee_id}'. "
-                    "If the user explicitly provides another employee ID, "
-                    "use that employee ID. "
+                    "If the user explicitly provides another "
+                    "employee ID, use that employee ID. "
                     "Do not invent employee IDs."
                 ),
             },
@@ -64,6 +67,10 @@ def run_tool_call(
 
     message = response.choices[0].message
 
+    # --------------------------------------------------------
+    # No tool required
+    # --------------------------------------------------------
+
     if not message.tool_calls:
         return {
             "type": "text",
@@ -71,6 +78,10 @@ def run_tool_call(
         }
 
     results = []
+
+    # --------------------------------------------------------
+    # Execute selected tools
+    # --------------------------------------------------------
 
     for tool_call in message.tool_calls:
 
@@ -89,10 +100,8 @@ def run_tool_call(
                 f"Unknown tool: {tool_name}"
             )
 
-        # -------------------------------------------------
-        # Resolve "my" requests to authenticated employee
-        # -------------------------------------------------
-
+        # Automatically use authenticated employee
+        # for employee-specific tools.
         if (
             tool_name
             in {
@@ -109,10 +118,6 @@ def run_tool_call(
             "employee_id"
         )
 
-        # -------------------------------------------------
-        # Authorization
-        # -------------------------------------------------
-
         authorize_tool_call(
             tool_name=tool_name,
             requester_id=employee_id,
@@ -121,10 +126,6 @@ def run_tool_call(
             hitl_id=hitl_id,
             approved_by=approved_by,
         )
-
-        # -------------------------------------------------
-        # Execute tool
-        # -------------------------------------------------
 
         result = tool_function(
             **arguments
@@ -141,51 +142,87 @@ def run_tool_call(
     return results
 
 
-if __name__ == "__main__":
+# ============================================================
+# RESPONSE LLM
+# ============================================================
 
-    employee_id = input(
-        "Employee ID: "
-    ).strip()
+def generate_tool_response(
+    question: str,
+    tool_results,
+) -> str | None:
+    """
+    Convert raw DB/tool results into a natural-language
+    response for the user.
 
-    question = input(
-        "You: "
-    ).strip()
+    Returns None if response generation fails so that the
+    deterministic formatter can be used as fallback.
+    """
 
     try:
 
-        result = run_tool_call(
-            question,
-            employee_id=employee_id,
+        client = get_deepseek_client()
+
+        serialized_results = json.dumps(
+            tool_results,
+            indent=2,
+            default=str,
         )
 
-        print(
-            json.dumps(
-                result,
-                indent=2,
-                default=str,
-            )
-        )
-
-    except PermissionError as e:
-
-        print(
-            json.dumps(
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
                 {
-                    "status": "denied",
-                    "message": str(e),
+                    "role": "system",
+                    "content": (
+                        "You are the final response assistant "
+                        "for an enterprise IT support system.\n\n"
+                        "Answer the user's request using ONLY "
+                        "the provided tool results.\n\n"
+                        "Rules:\n"
+                        "- Do not invent information.\n"
+                        "- Do not expose tool names.\n"
+                        "- Do not expose tool arguments.\n"
+                        "- Do not expose internal implementation "
+                        "details.\n"
+                        "- Do not mention databases, APIs, "
+                        "internal code, or system internals "
+                        "unless the user explicitly asks.\n"
+                        "- Clearly explain the result.\n"
+                        "- If the requested information was found, "
+                        "state it directly.\n"
+                        "- If the operation failed, clearly explain "
+                        "that it could not be completed.\n"
+                        "- If access was denied, clearly explain "
+                        "that the request was denied without "
+                        "revealing security internals.\n"
+                        "- Be concise and professional."
+                    ),
                 },
-                indent=2,
-            )
+                {
+                    "role": "user",
+                    "content": (
+                        f"USER REQUEST:\n"
+                        f"{question}\n\n"
+                        f"TOOL RESULTS:\n"
+                        f"{serialized_results}"
+                    ),
+                },
+            ],
         )
+
+        content = response.choices[0].message.content
+
+        if not content:
+            return None
+
+        return str(content).strip()
 
     except Exception as e:
 
         print(
-            json.dumps(
-                {
-                    "status": "error",
-                    "message": str(e),
-                },
-                indent=2,
-            )
+            "[RESPONSE LLM ERROR] "
+            f"{type(e).__name__}: {e}",
+            flush=True,
         )
+
+        return None

@@ -17,9 +17,9 @@ export async function submitRequest(
     '/api/chat',
     {
       method: 'POST',
-      body: {
+      body: JSON.stringify({
         query,
-      },
+      })
     }
   );
 }

@@ -22,7 +22,7 @@ export async function submitHITLRequest(
     '/api/hitl',
     {
       method: 'POST',
-      body,
+      body: JSON.stringify(body),
     }
   );
 }
@@ -86,7 +86,7 @@ export async function reviewHITLRequest(
     `/api/hitl/admin/${hitlId}`,
     {
       method: 'PATCH',
-      body,
+      body: JSON.stringify(body),
     }
   );
 }

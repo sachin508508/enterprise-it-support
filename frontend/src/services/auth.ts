@@ -35,10 +35,10 @@ export async function login(
     '/api/auth/login',
     {
       method: 'POST',
-      body: {
+      body: JSON.stringify({
         employee_id: employeeId,
         password,
-      },
+      })
     }
   );
 }

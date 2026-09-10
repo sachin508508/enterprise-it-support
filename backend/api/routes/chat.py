@@ -177,7 +177,15 @@ async def chat(
             request_id=conversation_id,
             status=status,
             query_type=query_type,
-            response=final_response,
+            response={
+                "status": status,
+                "route": route,
+                "query_type": query_type,
+                "message": final_response.get(
+                    "message",
+                    "The AI could not generate a response.",
+                ),
+            },
         )
 
     except HTTPException:

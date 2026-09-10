@@ -77,9 +77,9 @@ def create_llm():
 def ask_question(question: str):
 
     # Retrieve company documents
-    retriever = get_retriever(top_k=3)
+    retriever = get_retriever(top_k=5)
 
-    documents = retriever.invoke(question)
+    documents = retriever(question) 
 
     # No results
     if not documents:
