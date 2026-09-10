@@ -5,13 +5,17 @@ import React, {
   useState,
 } from 'react';
 
-import * as SecureStore from 'expo-secure-store';
-
 import {
   getCurrentUser,
   login as loginApi,
   LoginUser,
 } from '../services/auth';
+
+import {
+  getItem,
+  setItem,
+  deleteItem,
+} from '../services/storage';
 
 const TOKEN_KEY = 'auth_token';
 const USER_KEY = 'auth_user';
@@ -49,9 +53,7 @@ export function AuthProvider({
   async function restoreSession() {
     try {
       const token =
-        await SecureStore.getItemAsync(
-          TOKEN_KEY
-        );
+        await getItem(TOKEN_KEY);
 
       if (!token) {
         setIsLoading(false);
@@ -63,18 +65,13 @@ export function AuthProvider({
 
       setUser(response.user);
 
-      await SecureStore.setItemAsync(
+      await setItem(
         USER_KEY,
         JSON.stringify(response.user)
       );
     } catch {
-      await SecureStore.deleteItemAsync(
-        TOKEN_KEY
-      );
-
-      await SecureStore.deleteItemAsync(
-        USER_KEY
-      );
+      await deleteItem(TOKEN_KEY);
+      await deleteItem(USER_KEY);
 
       setUser(null);
     } finally {
@@ -92,12 +89,12 @@ export function AuthProvider({
         password
       );
 
-    await SecureStore.setItemAsync(
+    await setItem(
       TOKEN_KEY,
       response.access_token
     );
 
-    await SecureStore.setItemAsync(
+    await setItem(
       USER_KEY,
       JSON.stringify(response.user)
     );
@@ -106,13 +103,8 @@ export function AuthProvider({
   }
 
   async function logout() {
-    await SecureStore.deleteItemAsync(
-      TOKEN_KEY
-    );
-
-    await SecureStore.deleteItemAsync(
-      USER_KEY
-    );
+    await deleteItem(TOKEN_KEY);
+    await deleteItem(USER_KEY);
 
     setUser(null);
   }

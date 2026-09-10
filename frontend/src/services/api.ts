@@ -1,4 +1,4 @@
-import * as SecureStore from 'expo-secure-store';
+import { getItem } from './storage';
 
 import { APP_CONFIG } from '../constants/config';
 
@@ -15,7 +15,6 @@ export async function apiRequest<T>(
   endpoint: string,
   options: RequestOptions = {},
 ): Promise<T> {
-
   const {
     token,
     headers,
@@ -23,12 +22,10 @@ export async function apiRequest<T>(
   } = options;
 
   // Use explicitly supplied token first.
-  // Otherwise automatically load the saved token.
+  // Otherwise load it through the cross-platform storage layer.
   const authToken =
     token ??
-    await SecureStore.getItemAsync(
-      TOKEN_KEY
-    );
+    await getItem(TOKEN_KEY);
 
   const response = await fetch(
     `${API_BASE_URL}${endpoint}`,
@@ -60,7 +57,6 @@ export async function apiRequest<T>(
   }
 
   if (!response.ok) {
-
     const errorMessage =
       typeof data === 'object' &&
       data !== null &&

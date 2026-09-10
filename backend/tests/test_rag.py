@@ -47,7 +47,7 @@ from backend.ai.rag.deepseek import ask_question
 # ---------------------------------------------------------
 
 TEST_QUERY = (
-    "What are the times that our passwords should be reset?"
+    "What are all the expectations for a employee when they do their work from their home?"
 )
 
 

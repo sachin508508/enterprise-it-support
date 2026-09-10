@@ -156,9 +156,10 @@ User query:
 """
 
     decision = structured_llm.invoke(prompt)
+    route = decision.route.lower().strip()
 
     print(
-        f"[ROUTER] LLM -> {decision.route}",
+        f"[ROUTER] LLM -> {route}",
         flush=True,
     )
 

@@ -3,10 +3,6 @@ import re
 from typing import Any
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
 IGNORED_KEYS = {
     "tool",
     "arguments",
@@ -27,18 +23,8 @@ PREFERRED_TEXT_KEYS = (
 )
 
 
-# ============================================================
-# HELPERS
-# ============================================================
-
-def _humanize_key(
-    key: str,
-) -> str:
-
-    key = key.replace(
-        "_",
-        " ",
-    )
+def _humanize_key(key: str) -> str:
+    key = key.replace("_", " ")
 
     key = re.sub(
         r"(?<!^)(?=[A-Z])",
@@ -49,30 +35,17 @@ def _humanize_key(
     return key.strip().capitalize()
 
 
-def _format_value(
-    value: Any,
-) -> str:
-
+def _format_value(value: Any) -> str:
     if value is None:
         return "Not available."
 
-    if isinstance(
-        value,
-        bool,
-    ):
+    if isinstance(value, bool):
         return "Yes" if value else "No"
 
-    if isinstance(
-        value,
-        (str, int, float),
-    ):
+    if isinstance(value, (str, int, float)):
         return str(value)
 
-    if isinstance(
-        value,
-        list,
-    ):
-
+    if isinstance(value, list):
         if not value:
             return "None."
 
@@ -81,15 +54,10 @@ def _format_value(
             for item in value
         )
 
-    if isinstance(
-        value,
-        dict,
-    ):
-
+    if isinstance(value, dict):
         parts = []
 
         for key, item in value.items():
-
             if key in IGNORED_KEYS:
                 continue
 
@@ -106,14 +74,8 @@ def _format_value(
     return str(value)
 
 
-def _try_parse_json(
-    value: Any,
-) -> Any:
-
-    if not isinstance(
-        value,
-        str,
-    ):
+def _try_parse_json(value: Any) -> Any:
+    if not isinstance(value, str):
         return value
 
     value = value.strip()
@@ -128,6 +90,49 @@ def _try_parse_json(
 
 
 # ============================================================
+# RAG CONTENT FORMATTER
+# ============================================================
+
+def _format_rag_content(
+    content: Any,
+) -> str | None:
+
+    if not isinstance(content, list):
+        return None
+
+    parts = []
+
+    for block in content:
+
+        if not isinstance(block, dict):
+            continue
+
+        block_type = block.get("type")
+
+        text = block.get("text")
+
+        items = block.get("items")
+
+        if isinstance(text, str) and text.strip():
+            parts.append(text.strip())
+
+        if isinstance(items, list):
+            for item in items:
+
+                if item is None:
+                    continue
+
+                parts.append(
+                    f"• {str(item).strip()}"
+                )
+
+    if not parts:
+        return None
+
+    return "\n".join(parts)
+
+
+# ============================================================
 # MCP TEXT EXTRACTION
 # ============================================================
 
@@ -138,49 +143,33 @@ def _extract_mcp_text(
     if data is None:
         return None
 
-    if isinstance(
-        data,
-        str,
-    ):
+    if isinstance(data, str):
         return data.strip()
 
-    if isinstance(
-        data,
-        list,
-    ):
+    if isinstance(data, list):
 
         for item in data:
 
-            text = _extract_mcp_text(
-                item
-            )
+            text = _extract_mcp_text(item)
 
             if text:
                 return text
 
         return None
 
-    if not isinstance(
-        data,
-        dict,
-    ):
+    if not isinstance(data, dict):
         return None
 
-    # Direct text fields
     for key in PREFERRED_TEXT_KEYS:
 
-        value = data.get(
-            key
-        )
+        value = data.get(key)
 
-        if isinstance(
-            value,
-            str,
-        ) and value.strip():
-
+        if (
+            isinstance(value, str)
+            and value.strip()
+        ):
             return value.strip()
 
-    # Nested result
     if "result" in data:
 
         text = _extract_mcp_text(
@@ -190,7 +179,6 @@ def _extract_mcp_text(
         if text:
             return text
 
-    # Nested data
     if "data" in data:
 
         text = _extract_mcp_text(
@@ -211,10 +199,7 @@ def _format_jira_project(
     data: dict,
 ) -> str | None:
 
-    if not isinstance(
-        data,
-        dict,
-    ):
+    if not isinstance(data, dict):
         return None
 
     project_keys = {
@@ -271,10 +256,7 @@ def _format_jira_project(
 
         lead = data["lead"]
 
-        if isinstance(
-            lead,
-            dict,
-        ):
+        if isinstance(lead, dict):
 
             lead_name = (
                 lead.get("displayName")
@@ -304,29 +286,12 @@ def extract_human_response(
     result: Any,
 ) -> str:
 
-    result = _try_parse_json(
-        result
-    )
+    result = _try_parse_json(result)
 
-    # --------------------------------------------------------
-    # String
-    # --------------------------------------------------------
-
-    if isinstance(
-        result,
-        str,
-    ):
-
+    if isinstance(result, str):
         return result.strip()
 
-    # --------------------------------------------------------
-    # List
-    # --------------------------------------------------------
-
-    if isinstance(
-        result,
-        list,
-    ):
+    if isinstance(result, list):
 
         responses = []
 
@@ -337,28 +302,34 @@ def extract_human_response(
             )
 
             if text:
-                responses.append(
-                    text
-                )
+                responses.append(text)
 
         if responses:
+            return "\n\n".join(responses)
 
-            return "\n\n".join(
-                responses
-            )
+        return (
+            "The request was processed, "
+            "but no additional information "
+            "was returned."
+        )
 
-        return "The request was processed, but no additional information was returned."
-
-    # --------------------------------------------------------
-    # Non-dict
-    # --------------------------------------------------------
-
-    if not isinstance(
-        result,
-        dict,
-    ):
-
+    if not isinstance(result, dict):
         return str(result)
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    # RAG structured content must be preferred
+    # over the short summary.
+    # --------------------------------------------------------
+
+    if result.get("type") == "rag_response":
+
+        rag_content = _format_rag_content(
+            result.get("content")
+        )
+
+        if rag_content:
+            return rag_content
 
     # --------------------------------------------------------
     # Preferred response fields
@@ -366,15 +337,12 @@ def extract_human_response(
 
     for key in PREFERRED_TEXT_KEYS:
 
-        value = result.get(
-            key
-        )
+        value = result.get(key)
 
-        if isinstance(
-            value,
-            str,
-        ) and value.strip():
-
+        if (
+            isinstance(value, str)
+            and value.strip()
+        ):
             return value.strip()
 
     # --------------------------------------------------------
@@ -385,17 +353,12 @@ def extract_human_response(
 
         nested = result["result"]
 
-        text = _extract_mcp_text(
-            nested
-        )
+        text = _extract_mcp_text(nested)
 
         if text:
             return text
 
-        if isinstance(
-            nested,
-            dict,
-        ):
+        if isinstance(nested, dict):
 
             jira_text = _format_jira_project(
                 nested
@@ -432,9 +395,7 @@ def extract_human_response(
     # Generic fallback
     # --------------------------------------------------------
 
-    return _format_value(
-        result
-    )
+    return _format_value(result)
 
 
 # ============================================================
@@ -445,16 +406,11 @@ def get_result_status(
     result: Any,
 ) -> str:
 
-    if isinstance(
-        result,
-        list,
-    ):
+    if isinstance(result, list):
 
         for item in result:
 
-            status = get_result_status(
-                item
-            )
+            status = get_result_status(item)
 
             if status in {
                 "error",
@@ -466,15 +422,10 @@ def get_result_status(
 
         return "success"
 
-    if not isinstance(
-        result,
-        dict,
-    ):
+    if not isinstance(result, dict):
         return "success"
 
-    status = result.get(
-        "status"
-    )
+    status = result.get("status")
 
     if status in {
         "error",
@@ -486,9 +437,7 @@ def get_result_status(
     }:
         return status
 
-    nested = result.get(
-        "result"
-    )
+    nested = result.get("result")
 
     if nested is not None:
 
@@ -518,9 +467,7 @@ def build_final_response(
         "mcp": "Action",
     }
 
-    status = get_result_status(
-        result
-    )
+    status = get_result_status(result)
 
     if status == "success":
         normalized_status = "successful"
@@ -529,11 +476,6 @@ def build_final_response(
     else:
         normalized_status = status
 
-    # --------------------------------------------------------
-    # Use response LLM when available.
-    # Otherwise deterministic formatter.
-    # --------------------------------------------------------
-
     message = (
         message_override.strip()
         if isinstance(
@@ -541,9 +483,7 @@ def build_final_response(
             str,
         )
         and message_override.strip()
-        else extract_human_response(
-            result
-        )
+        else extract_human_response(result)
     )
 
     return {
